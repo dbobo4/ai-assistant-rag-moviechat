@@ -12,7 +12,7 @@
     "db:seed": "tsx scripts/insertEmbedding.ts"
   },
   "dependencies": {
-    "drizzle-orm": "^0.30.7",
+    "drizzle-orm": "^0.32.0",
     "next": "14.1.0",
     "openai": "^4.58.1",
     "postgres": "^3.4.3",
@@ -24,7 +24,7 @@
     "@types/node": "^20.11.20",
     "eslint": "^8.56.0",
     "eslint-config-next": "14.1.0",
-    "drizzle-kit": "^0.22.8",
+    "drizzle-kit": "^0.24.0",
     "tsx": "^4.7.1",
     "typescript": "^5.3.3"
   }
