@@ -1,0 +1,111 @@
+# ============================================
+# ENVIRONMENT FILES
+# ============================================
+.env
+.env.*
+!.env.example        # ha van példa-fájl, az maradjon
+
+# ============================================
+# NODE / JS BUILD ARTEFACTS
+# ============================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# ============================================
+# BUILD / DIST OUTPUTS
+# ============================================
+dist/
+build/
+.next/
+out/
+.vercel/
+.cache/
+coverage/
+tmp/
+temp/
+logs/
+*.log
+
+# ============================================
+# TYPESCRIPT / JAVASCRIPT COMPILED FILES
+# ============================================
+*.tsbuildinfo
+*.tgz
+*.map
+*.min.js
+
+# ============================================
+# SYSTEM / IDE / EDITOR FILES
+# ============================================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ============================================
+# TESTS / LOCAL DATA / AI SIMULATION OUTPUTS
+# ============================================
+__tests__/
+__mocks__/
+test-results/
+*.test.js
+*.spec.js
+*.spec.ts
+simulation-logs/
+debug-outputs/
+
+# ============================================
+# DATABASES / RAG DATA
+# ============================================
+*.sqlite
+*.db
+pgdata/
+vector_store/
+data/
+embeddings/
+*.jsonl
+*.csv
+*.parquet
+
+# ============================================
+# PYTHON TEMP (ha RAG backendben van py is)
+# ============================================
+__pycache__/
+*.pyc
+*.pyo
+
+# ============================================
+# DOCKER / COMPOSE BUILD OUTPUTS
+# ============================================
+docker-compose.override.yml
+*.tar
+*.img
+*.pid
+
+# ============================================
+# MISC
+# ============================================
+*.bak
+*.old
+*.tmp
+*.temp
+*.lock
+*.orig
+*.rej
+*.patch
+
+# ============================================
+# CODING ASSISTANT / LOCAL CONTEXT FILES
+# ============================================
+.codex_sessions/
+.codexignore
+.codexcache/
+.codexhistory/
