@@ -49,6 +49,8 @@ export async function POST(req: Request) {
       );
     }
 
+    await fs.unlink(filePath).catch(() => {});
+
     const processed = Array.isArray(triggerJson?.processed_chunks)
       ? triggerJson.processed_chunks.length
       : triggerJson?.processed ?? 0;

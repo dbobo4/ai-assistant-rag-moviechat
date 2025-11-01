@@ -24,7 +24,7 @@ services:
       - db
       - uploader
     volumes:
-      - ./movie_data:/app/movie_data
+      - movie_data_shared:/app/movie_data
 
   uploader:
     build:
@@ -35,10 +35,9 @@ services:
     ports:
       - "${UPLOADER_PORT:-8000}:8000"
     volumes:
-      - ./movie_data:/app/movie_data
-    environment:
-      - CHUNK_API_URL=http://app:3000/api/upload-chunks
-      - MOVIE_DATA_DIR=/app/movie_data
+      - movie_data_shared:/app/movie_data
+    env_file:
+      - uploader/uploader.env
 
   pgadmin:
     image: dpage/pgadmin4
@@ -56,6 +55,7 @@ services:
 volumes:
   postgres_data:
   pgadmin_data:
+  movie_data_shared:
 
 
 # webapp: http://localhost:3000
