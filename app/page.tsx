@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from "react";
+import { useRef, useState, type ChangeEvent } from "react";
 
 interface UiMsg {
   id: string;
@@ -12,6 +12,11 @@ export default function Chat() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<UiMsg[]>([]);
   const controllerRef = useRef<AbortController | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploadStatus, setUploadStatus] = useState<
+    "idle" | "uploading" | "success" | "error"
+  >("idle");
+  const [uploadMessage, setUploadMessage] = useState("");
 
   const placeholder = "Ask something about movies from memory";
 
@@ -84,6 +89,56 @@ export default function Chat() {
     }
   }
 
+  function openFilePicker() {
+    fileInputRef.current?.click();
+  }
+
+  async function handleFileUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setUploadStatus("uploading");
+    setUploadMessage(`Uploading ${file.name}...`);
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        const errorMessage =
+          typeof data?.error === "string" ? data.error : "Upload failed.";
+        setUploadStatus("error");
+        setUploadMessage(errorMessage);
+        return;
+      }
+
+      const filename =
+        typeof data?.filename === "string" ? data.filename : file.name;
+      const processed =
+        typeof data?.processed === "number" ? data.processed : undefined;
+
+      setUploadStatus("success");
+      setUploadMessage(
+        processed !== undefined
+          ? `Uploaded ${filename} (${processed} chunks processed)`
+          : `Uploaded ${filename}`
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Upload failed.";
+      setUploadStatus("error");
+      setUploadMessage(message);
+    } finally {
+      event.target.value = "";
+    }
+  }
+
   return (
     <div className="chat-app">
       <div className="chat-shell">
@@ -92,6 +147,33 @@ export default function Chat() {
           <p className="chat-sidebar__description">
             Movie knowledge base assistant.
           </p>
+          <div className="chat-sidebar__actions">
+            <input
+              ref={fileInputRef}
+              type="file"
+              hidden
+              onChange={handleFileUpload}
+            />
+            <button
+              type="button"
+              className="chat-sidebar__upload-button"
+              onClick={openFilePicker}
+              disabled={uploadStatus === "uploading"}
+            >
+              {uploadStatus === "uploading"
+                ? "Uploading..."
+                : "Upload movie data"}
+            </button>
+            {uploadMessage && (
+              <span
+                className={`chat-sidebar__upload-status ${
+                  uploadStatus === "error" ? "is-error" : "is-success"
+                }`}
+              >
+                {uploadMessage}
+              </span>
+            )}
+          </div>
         </aside>
 
         <div className="chat-main">

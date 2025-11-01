@@ -43,3 +43,20 @@ export async function createResourceRaw({ content }: CreateResourceArgs) {
 
   return resource;
 }
+
+export async function createResourceFromChunks(chunks: string[]) {
+  if (!Array.isArray(chunks) || chunks.length === 0) {
+    throw new Error("At least one chunk is required to create resources");
+  }
+
+  const created = [];
+  for (const chunk of chunks) {
+    const resource = await createResourceRaw({ content: chunk });
+    created.push(resource);
+  }
+
+  return {
+    message: `Created ${created.length} resources from chunks`,
+    resources: created,
+  };
+}

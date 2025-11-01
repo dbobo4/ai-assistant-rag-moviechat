@@ -3,6 +3,9 @@
 # ============================================
 .env
 .env.*
+*env*
+!*env*example*
+!*example*env*
 !.env.example        # ha van példa-fájl, az maradjon
 
 # ============================================

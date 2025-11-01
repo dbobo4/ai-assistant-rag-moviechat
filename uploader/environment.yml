@@ -1,0 +1,17 @@
+name: rag-uploader
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - fastapi
+  - uvicorn
+  - libmagic
+  - python-magic
+  - pip
+  - pip:
+      - requests
+      - unstructured[md,html]
+      - markdown
+      - beautifulsoup4
+      - lxml

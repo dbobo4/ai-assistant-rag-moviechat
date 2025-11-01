@@ -96,13 +96,15 @@ export async function POST(req: NextRequest) {
     })),
   ];
 
+  let toolUsed = false;
+
   for (let step = 0; step < 3; step++) {
     const completion = await client.chat.completions.create({
       model: CHAT_MODEL,
       temperature: 0.3,
       messages,
       tools,
-      tool_choice: "auto",
+      tool_choice: toolUsed ? "none" : "auto",
     });
 
     const msg = completion.choices[0]?.message;
@@ -111,7 +113,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (!msg.tool_calls || msg.tool_calls.length === 0) {
-      const text = msg.content ?? "";
+      const text =
+        (msg.content && msg.content.trim().length > 0
+          ? msg.content
+          : "I'm sorry, but I don't have the necessary information to answer that.") ?? "";
       return new Response(text, {
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
@@ -120,11 +125,26 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    if (toolUsed) {
+      return new Response(
+        "Unable to provide additional tool output at this time.",
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+          },
+        }
+      );
+    }
+
     messages.push({
       role: "assistant",
       content: msg.content ?? "",
       tool_calls: msg.tool_calls,
     } as any);
+
+    toolUsed = true;
 
     for (const call of msg.tool_calls) {
       const name = call.function?.name;
@@ -137,6 +157,13 @@ export async function POST(req: NextRequest) {
           const args = JSON.parse(rawArgs) as AddResourceArgs;
           const saved = await createResourceRaw({ content: args.content });
           result = { ok: true, saved };
+          return new Response("Saved.", {
+            status: 200,
+            headers: {
+              "Content-Type": "text/plain; charset=utf-8",
+              "Cache-Control": "no-store",
+            },
+          });
         } else if (name === "getInformation") {
           const args = JSON.parse(rawArgs) as GetInformationArgs;
           const chunks = await findRelevantContent(args.question);
@@ -158,5 +185,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return new Response("No final answer after tool loop.", { status: 500 });
+  return new Response("Unable to produce a final answer.", {
+    status: 200,
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
 }
