@@ -22,22 +22,22 @@ services:
       - "${APP_PORT:-3000}:3000"
     depends_on:
       - db
-      - uploader
+      - rag_backend
     volumes:
       - movie_data_shared:/app/movie_data
 
-  uploader:
+  rag_backend:
     build:
-      context: ./uploader
+      context: ./rag_backend
       dockerfile: Dockerfile
-    container_name: rag_uploader
+    container_name: rag_backend
     restart: unless-stopped
     ports:
       - "${UPLOADER_PORT:-8000}:8000"
     volumes:
       - movie_data_shared:/app/movie_data
     env_file:
-      - uploader/uploader.env
+      - rag_backend/rag_backend.env
 
   pgadmin:
     image: dpage/pgadmin4

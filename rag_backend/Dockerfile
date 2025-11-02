@@ -13,7 +13,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir fastapi uvicorn requests tqdm \
-    "unstructured[md,html]" markdown beautifulsoup4 lxml
+    "unstructured[md,html]" markdown beautifulsoup4 lxml \
+    sentence-transformers
 
 COPY . .
 

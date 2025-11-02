@@ -10,10 +10,10 @@ const MOVIE_DATA_DIR =
   env.MOVIE_DATA_DIR && env.MOVIE_DATA_DIR.trim().length > 0
     ? env.MOVIE_DATA_DIR
     : path.join(process.cwd(), "movie_data");
-const UPLOADER_URL =
-  env.UPLOADER_URL && env.UPLOADER_URL.trim().length > 0
-    ? env.UPLOADER_URL
-    : "http://uploader:8000";
+const PY_BACKEND_URL =
+  env.PY_BACKEND_URL && env.PY_BACKEND_URL.trim().length > 0
+    ? env.PY_BACKEND_URL
+    : "http://rag_backend:8000";
 
 export async function POST(req: Request) {
   try {
@@ -32,7 +32,7 @@ export async function POST(req: Request) {
     const bytes = new Uint8Array(arrayBuffer);
     await fs.writeFile(filePath, bytes);
 
-    const processUrl = new URL("/process-file", UPLOADER_URL).toString();
+    const processUrl = new URL("/process-file", PY_BACKEND_URL).toString();
     const triggerResponse = await fetch(processUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },

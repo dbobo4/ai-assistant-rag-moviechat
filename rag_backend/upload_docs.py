@@ -4,11 +4,13 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from reranking import router as reranking_router
 
 CHUNK_API_URL = os.getenv("CHUNK_API_URL", "http://app:3000/api/upload-chunks")
 DATA_DIR = Path(os.getenv("MOVIE_DATA_DIR", "/app/movie_data")).resolve()
 
 app = FastAPI()
+app.include_router(reranking_router)
 
 
 class FileReq(BaseModel):
