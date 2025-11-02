@@ -99,20 +99,29 @@ export async function POST(req: NextRequest) {
   let toolUsed = false;
 
   for (let step = 0; step < 3; step++) {
-    const completion = await client.chat.completions.create({
-      model: CHAT_MODEL,
-      temperature: 0.3,
-      messages,
-      tools,
-      tool_choice: toolUsed ? "none" : "auto",
-    });
+    try {
+      console.log("[chat] step", step, {
+        toolUsed,
+        historyCount: history.length,
+      });
 
-    const msg = completion.choices[0]?.message;
-    if (!msg) {
-      break;
-    }
+      const completion = await client.chat.completions.create({
+        model: CHAT_MODEL,
+        temperature: 0.3,
+        messages,
+        tools,
+        tool_choice: toolUsed ? "none" : "auto",
+      });
 
-    if (!msg.tool_calls || msg.tool_calls.length === 0) {
+      const msg = completion.choices[0]?.message;
+      if (!msg) {
+        console.log("[chat] no message returned from model");
+        break;
+      }
+
+      if (!msg.tool_calls || msg.tool_calls.length === 0) {
+        const preview = (msg.content ?? "").slice(0, 120);
+        console.log("[chat] model returned final text", { length: (msg.content ?? "").length, preview });
       const text =
         (msg.content && msg.content.trim().length > 0
           ? msg.content
@@ -123,9 +132,12 @@ export async function POST(req: NextRequest) {
           "Cache-Control": "no-store",
         },
       });
-    }
+      }
 
-    if (toolUsed) {
+      if (toolUsed) {
+        console.log("[chat] model attempted another tool after first", {
+          toolCalls: msg.tool_calls?.map((t) => t.function?.name),
+        });
       return new Response(
         "Unable to provide additional tool output at this time.",
         {
@@ -136,7 +148,7 @@ export async function POST(req: NextRequest) {
           },
         }
       );
-    }
+      }
 
     messages.push({
       role: "assistant",
@@ -146,7 +158,7 @@ export async function POST(req: NextRequest) {
 
     toolUsed = true;
 
-    for (const call of msg.tool_calls) {
+      for (const call of msg.tool_calls) {
       const name = call.function?.name;
       const rawArgs = call.function?.arguments ?? "{}";
 
@@ -155,6 +167,10 @@ export async function POST(req: NextRequest) {
       try {
         if (name === "addResource") {
           const args = JSON.parse(rawArgs) as AddResourceArgs;
+          console.log("[chat] tool:addResource", {
+            contentPreview: (args?.content ?? "").slice(0, 80),
+            length: (args?.content ?? "").length,
+          });
           const saved = await createResourceRaw({ content: args.content });
           result = { ok: true, saved };
           return new Response("Saved.", {
@@ -166,7 +182,12 @@ export async function POST(req: NextRequest) {
           });
         } else if (name === "getInformation") {
           const args = JSON.parse(rawArgs) as GetInformationArgs;
+          console.log("[chat] tool:getInformation", {
+            questionPreview: (args?.question ?? "").slice(0, 80),
+            length: (args?.question ?? "").length,
+          });
           const chunks = await findRelevantContent(args.question);
+          console.log("[chat] retrieved chunks", { count: chunks.length });
           result = { ok: true, chunks };
         } else {
           result = { ok: false, error: `Unknown tool: ${name}` };
@@ -174,6 +195,7 @@ export async function POST(req: NextRequest) {
       } catch (error: unknown) {
         const message =
           error instanceof Error ? error.message : String(error ?? "Error");
+        console.error("[chat] tool error", { name, message });
         result = { ok: false, error: message };
       }
 
@@ -182,6 +204,20 @@ export async function POST(req: NextRequest) {
         tool_call_id: call.id,
         content: JSON.stringify(result),
       } as any);
+    }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err ?? "error");
+      console.error("[chat] model call failed", { step, message });
+      return new Response(
+        "I'm sorry, I'm temporarily unable to answer your request.",
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+          },
+        }
+      );
     }
   }
 
