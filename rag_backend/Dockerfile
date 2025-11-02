@@ -1,20 +1,22 @@
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential \
-        libmagic1 \
-        libmagic-dev \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential libmagic1 libmagic-dev curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir fastapi uvicorn requests tqdm \
-    "unstructured[md,html]" markdown beautifulsoup4 lxml \
-    sentence-transformers
+COPY requirements.txt /app/requirements.txt
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install -U pip wheel setuptools && \
+    pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
+        torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 && \
+    pip install --no-cache-dir -r /app/requirements.txt
 
 COPY . .
 
