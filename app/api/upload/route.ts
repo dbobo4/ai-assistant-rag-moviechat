@@ -10,10 +10,7 @@ const MOVIE_DATA_DIR =
   env.MOVIE_DATA_DIR && env.MOVIE_DATA_DIR.trim().length > 0
     ? env.MOVIE_DATA_DIR
     : path.join(process.cwd(), "movie_data");
-const PY_BACKEND_URL =
-  env.PY_BACKEND_URL && env.PY_BACKEND_URL.trim().length > 0
-    ? env.PY_BACKEND_URL
-    : "http://rag_backend:8000";
+const PY_BACKEND_URL = env.PY_BACKEND_URL ?? "http://rag_backend:8000";
 
 export async function POST(req: Request) {
   try {
@@ -33,11 +30,22 @@ export async function POST(req: Request) {
     await fs.writeFile(filePath, bytes);
 
     const processUrl = new URL("/process-file", PY_BACKEND_URL).toString();
-    const triggerResponse = await fetch(processUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ filename: file.name }),
-    });
+    let triggerResponse: Response;
+    try {
+      triggerResponse = await fetch(processUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ filename: file.name }),
+      });
+    } catch (fetchError) {
+      console.error("Upload route fetch error:", fetchError);
+      return new Response(
+        JSON.stringify({
+          error: `Failed to reach backend at ${processUrl}`,
+        }),
+        { status: 502 }
+      );
+    }
 
     const triggerJson = await triggerResponse.json().catch(() => ({}));
     if (!triggerResponse.ok) {
@@ -48,8 +56,6 @@ export async function POST(req: Request) {
         { status: triggerResponse.status }
       );
     }
-
-    await fs.unlink(filePath).catch(() => {});
 
     const processed = Array.isArray(triggerJson?.processed_chunks)
       ? triggerJson.processed_chunks.length

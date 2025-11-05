@@ -4,13 +4,18 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
 from reranking import router as reranking_router
+from single_turn_evaluation import router as evaluation_router  # <-- routert importálunk
 
 CHUNK_API_URL = os.getenv("CHUNK_API_URL", "http://app:3000/api/upload-chunks")
 DATA_DIR = Path(os.getenv("MOVIE_DATA_DIR", "/app/movie_data")).resolve()
 
 app = FastAPI()
+
+# Moduláris felépítés: routerek bekötése
 app.include_router(reranking_router)
+app.include_router(evaluation_router)
 
 
 class FileReq(BaseModel):
@@ -23,21 +28,17 @@ def process_file(path: Path) -> list[str]:
 
     if ext == ".md":
         from unstructured.partition.md import partition_md
-
         elements = partition_md(filename=filename)
     elif ext == ".txt":
         from unstructured.partition.text import partition_text
-
         elements = partition_text(filename=filename)
     elif ext in (".html", ".htm"):
         from unstructured.partition.html import partition_html
-
         elements = partition_html(filename=filename)
     else:
         raise HTTPException(status_code=415, detail=f"Unsupported file type: {ext}")
 
     from unstructured.chunking.basic import chunk_elements
-
     chunks = chunk_elements(elements, max_characters=500, overlap=50)
     texts = [str(ch) for ch in chunks if str(ch).strip()]
     return texts
@@ -58,7 +59,7 @@ def process_single_file(req: FileReq):
     if not texts:
         return {"processed_chunks": []}
 
-    res = requests.post(CHUNK_API_URL, json={"chunks": texts})
+    res = requests.post(CHUNK_API_URL, json={"chunks": texts}, timeout=60)
     try:
         payload = res.json()
     except Exception:

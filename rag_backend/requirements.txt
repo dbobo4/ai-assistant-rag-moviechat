@@ -8,3 +8,4 @@ beautifulsoup4
 lxml
 sentence-transformers
 python-magic
+openai>=1.40.0
