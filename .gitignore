@@ -1,24 +1,44 @@
-# Node
+# =========================
+# Node / Next.js
+# =========================
 node_modules
 .next
 out
 
-# Env files
+# =========================
+# Environment files (all levels)
+# =========================
+# Ignore all .env files anywhere in the repo
 .env
 .env.*
+*.env
+**/*.env
+
+# Keep only example env files (for documentation)
+!*.env.example
+!**/*.env.example
+
+# Explicitly ignore known ones
 db.env
 app.env
+rag_backend/*.env
 
+# =========================
 # Logs
+# =========================
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Docker
+# =========================
+# Docker / Database
+# =========================
 postgres_data
 app_node_modules
 app.db
 
-# Codex
+# =========================
+# Codex / Misc
+# =========================
 .codexignore
 AGENTS.md

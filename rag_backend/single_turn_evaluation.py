@@ -9,10 +9,13 @@ import threading
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import requests
 from fastapi import APIRouter, Request
+from celery.result import AsyncResult
+
+from celery_app import celery_app
 from openai import OpenAI
 
 # --------- LOGGING ---------
@@ -45,15 +48,13 @@ for h in logging.getLogger().handlers:
     h.addFilter(_CtxFilter())
 
 def set_rid_for_thread(rid: str):
-    # per-thread RID (egyszerű, de működő)
+
     class _RidFilter(logging.Filter):
         def filter(self, record):
             record.rid = rid
             record.hostname = HOST
             return True
     for h in logging.getLogger().handlers:
-        # remove previous _RidFilter if any
-        # (egyszerűsítés: nem tisztítjuk, nem lesz gond egy folyamaton belül)
         h.addFilter(_RidFilter())
 
 log = logging.getLogger("rag.eval")
@@ -73,8 +74,7 @@ ASK_RETRIES = int(os.getenv("ASK_RETRIES", "2"))
 OPENAI_RETRIES = int(os.getenv("OPENAI_RETRIES", "3"))
 OPENAI_BACKOFF_BASE = float(os.getenv("OPENAI_BACKOFF_BASE", "0.8"))
 
-# Az OPENAI_API_KEY-nek itt elérhetőnek kell lennie a konténer env-ben.
-client = OpenAI()  # ha az env-ben van OPENAI_API_KEY, ez elég
+client = OpenAI()
 
 # --------- DATA ---------
 @dataclass
@@ -245,38 +245,64 @@ def generate_pairs(content: str, file_name: str, num_pairs: int) -> List[Dict[st
                 continue
             raise
 
-def build_golden_dataset(data_dir: Path, num_pairs: int) -> List[Sample]:
-    log.info("build_golden_dataset.start " + json.dumps({
-        "data_dir": str(data_dir),
-        "num_pairs": num_pairs
-    }))
+def build_golden_dataset(
+    data_dir: Path,
+    num_pairs: int,
+    *,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    rid: str | None = None,
+) -> tuple[List[Sample], int, int]:
+    log.info(
+        "build_golden_dataset.start "
+        + json.dumps({"data_dir": str(data_dir), "num_pairs": num_pairs}),
+        extra={"rid": rid or "-"},
+    )
     samples: List[Sample] = []
     files = [p for p in sorted(data_dir.rglob("*")) if p.is_file()]
-    log.info("build_golden_dataset.files " + json.dumps({
-        "count": len(files),
-        "names": [f.name for f in files][:50]  # limit log
-    }))
+    total_expected = len(files) * num_pairs
+    processed = 0
+
+    log.info(
+        "build_golden_dataset.files "
+        + json.dumps({"count": len(files), "names": [f.name for f in files][:50]}),
+        extra={"rid": rid or "-"},
+    )
 
     for idx, path in enumerate(files, start=1):
         raw = _read_document(path)
         if not raw:
-            log.warning(f"skip_unreadable {path}")
+            log.warning(f"skip_unreadable {path}", extra={"rid": rid or "-"})
             continue
         truncated = _truncate(raw)
-        log.info("generate_pairs.begin " + json.dumps({
-            "i": idx, "of": len(files), "file": path.name, "len_raw": len(raw), "len_trunc": len(truncated)
-        }))
+        log.info(
+            "generate_pairs.begin "
+            + json.dumps({
+                "i": idx,
+                "of": len(files),
+                "file": path.name,
+                "len_raw": len(raw),
+                "len_trunc": len(truncated),
+            }),
+            extra={"rid": rid or "-"},
+        )
         t0 = _now_ms()
         pairs = generate_pairs(truncated, path.name, num_pairs)
         dt = _now_ms() - t0
-        log.info("generate_pairs.end " + json.dumps({
-            "file": path.name, "pairs": len(pairs), "ms": dt
-        }))
+        log.info(
+            "generate_pairs.end " + json.dumps({"file": path.name, "pairs": len(pairs), "ms": dt}),
+            extra={"rid": rid or "-"},
+        )
         for pair in pairs:
             samples.append(Sample(path.name, pair["question"], pair["answer"]))
+            processed += 1
+            if progress_callback and total_expected:
+                progress_callback(min(processed, total_expected), total_expected, "dataset")
 
-    log.info("build_golden_dataset.done " + json.dumps({"samples": len(samples)}))
-    return samples
+    log.info(
+        "build_golden_dataset.done " + json.dumps({"samples": len(samples)}),
+        extra={"rid": rid or "-"},
+    )
+    return samples, processed, total_expected
 
 def ask_application(question: str, chat_url: str, rid: str | None = None) -> str:
     payload = {"messages": [{"role": "user", "parts": [{"type": "text", "text": question}]}]}
@@ -367,7 +393,15 @@ def _judge(system_prompt: str, question: str, ground_truth: str, candidate: str,
                 continue
             raise
 
-def evaluate_samples(samples: List[Sample], chat_url: str, rid: str | None = None) -> Dict[str, object]:
+def evaluate_samples(
+    samples: List[Sample],
+    chat_url: str,
+    rid: str | None = None,
+    *,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    progress_start: int = 0,
+    progress_total: Optional[int] = None,
+) -> Dict[str, object]:
     if not samples:
         return {"total": 0, "accuracy": 0.0, "relevance_rate": 0.0, "details": []}
 
@@ -377,6 +411,11 @@ def evaluate_samples(samples: List[Sample], chat_url: str, rid: str | None = Non
 
     total = len(samples)
     log.info("evaluate_samples.start " + json.dumps({"total": total}), extra={"rid": rid or "-"})
+
+    processed = progress_start
+    combined_total = progress_total or (progress_start + total)
+    if combined_total == 0:
+        combined_total = max(total, 1)
 
     for i, sample in enumerate(samples, start=1):
         step_t0 = _now_ms()
@@ -431,6 +470,10 @@ def evaluate_samples(samples: List[Sample], chat_url: str, rid: str | None = Non
             "latency_ms": step_ms,
         })
 
+        processed += 1
+        if progress_callback:
+            progress_callback(min(processed, combined_total), combined_total, "evaluation")
+
     return {
         "total": total,
         "correct": correct,
@@ -446,6 +489,8 @@ def evaluate(
     num_pairs: int | None = None,
     write_dataset: bool = False,
     rid: str | None = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    dataset_filename: str | None = None,
 ) -> Dict[str, object]:
     data_dir = Path(data_dir or DEFAULT_MOVIE_DATA_DIR)
     chat_url = chat_url or DEFAULT_APP_CHAT_URL
@@ -460,22 +505,119 @@ def evaluate(
         "dataset_model": DATASET_MODEL, "judge_model": JUDGE_MODEL
     }), extra={"rid": rid or "-"})
 
-    samples = build_golden_dataset(data_dir, num_pairs)
+    samples, produced_pairs, expected_total = build_golden_dataset(
+        data_dir,
+        num_pairs,
+        progress_callback=progress_callback,
+        rid=rid,
+    )
+
+    dataset_output = {
+        "samples": [
+            {"source": s.source, "question": s.question, "answer": s.answer}
+            for s in samples
+        ]
+    }
 
     if write_dataset:
-        dataset_output = {"samples": [{"source": s.source, "question": s.question, "answer": s.answer} for s in samples]}
-        Path(os.getenv("GOLDEN_DATASET_PATH", "golden_dataset.json")).write_text(
+        dataset_path = Path(dataset_filename or os.getenv("GOLDEN_DATASET_PATH", "golden_dataset.json"))
+        dataset_path.write_text(
             json.dumps(dataset_output, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
         log.info("golden_dataset.written", extra={"rid": rid or "-"})
+    else:
+        dataset_path = None
+
+    total_pairs = expected_total or produced_pairs or len(samples)
+    if total_pairs <= 0:
+        total_pairs = len(samples) or 1
 
     t0 = _now_ms()
-    summary = evaluate_samples(samples, chat_url, rid)
+    summary = evaluate_samples(
+        samples,
+        chat_url,
+        rid,
+        progress_callback=progress_callback,
+        progress_start=produced_pairs,
+        progress_total=total_pairs,
+    )
     dt = _now_ms() - t0
     log.info("evaluate.done " + json.dumps({"elapsed_ms": dt, **{k: summary.get(k) for k in ("total","accuracy","relevance_rate")}}),
              extra={"rid": rid or "-"})
+    if write_dataset:
+        summary["dataset_path"] = str(dataset_path) if dataset_path else None
+    summary["dataset_size"] = len(dataset_output.get("samples", []))
     return summary
+
+
+@celery_app.task(bind=True, name="tasks.evaluate_job")
+def evaluate_job(self, job_id: str | None = None):
+    rid = job_id or uuid.uuid4().hex
+
+    def progress(step: int, total: int, phase: str):
+        total = max(total, 1)
+        self.update_state(state="PROGRESS", meta={"i": step, "of": total, "phase": phase})
+
+    try:
+        set_rid_for_thread(rid)
+        log.info("celery.evaluate_job.start", extra={"rid": rid})
+        summary = evaluate(
+            write_dataset=True,
+            rid=rid,
+            progress_callback=progress,
+            dataset_filename=f"golden_dataset_{rid}.json",
+        )
+        log.info(
+            "celery.evaluate_job.success "
+            + json.dumps({
+                "total": summary.get("total"),
+                "accuracy": summary.get("accuracy"),
+                "relevance_rate": summary.get("relevance_rate"),
+            }),
+            extra={"rid": rid},
+        )
+        summary["rid"] = rid
+        return summary
+    except Exception as exc:
+        log.error("celery.evaluate_job.failed " + repr(exc), extra={"rid": rid})
+        log.error(traceback.format_exc(), extra={"rid": rid})
+        raise
+
+@router.post("/evaluate-job")
+def start_evaluation_job(request: Request):
+    rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+    set_rid_for_thread(rid)
+    log.info(
+        "HTTP /evaluate-job enqueued",
+        extra={"rid": rid},
+    )
+    task = evaluate_job.apply_async(kwargs={"job_id": rid}, queue="evalq")
+    return {"job_id": task.id}
+
+
+@router.get("/evaluate-job/{job_id}")
+def evaluation_job_status(job_id: str):
+    result = AsyncResult(job_id, app=celery_app)
+    state = result.state
+
+    if state == "PENDING":
+        return {"status": "PENDING"}
+    if state in {"STARTED", "RETRY"}:
+        return {"status": "STARTED"}
+    if state == "PROGRESS":
+        meta = result.info if isinstance(result.info, dict) else {}
+        return {"status": "PROGRESS", "progress": meta}
+    if state == "SUCCESS":
+        return {"status": "SUCCESS", "result": result.result}
+
+    error_info = result.info
+    if isinstance(error_info, Exception):
+        error_text = repr(error_info)
+    else:
+        error_text = str(error_info) if error_info is not None else "Unknown error"
+    return {"status": "FAILURE", "error": error_text}
+
 
 @router.post("/evaluate-single-turn")
 def evaluate_single_turn(request: Request):

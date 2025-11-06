@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type EvaluationDetail = {
   source: string;
@@ -20,32 +20,126 @@ type EvaluationSummary = {
   details: EvaluationDetail[];
 };
 
+type JobProgress = { i?: number; of?: number; phase?: string } | null;
+
+type JobStatusResponse =
+  | { status: "PENDING" | "STARTED" }
+  | { status: "PROGRESS"; progress?: JobProgress }
+  | { status: "SUCCESS"; result: EvaluationSummary }
+  | { status: "FAILURE"; error?: string };
+
+const POLL_INTERVAL_MS = 2000;
+
 export default function EvaluatePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<EvaluationSummary | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [progress, setProgress] = useState<JobProgress>(null);
+  const jobIdRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  async function runEvaluation() {
-    setLoading(true);
-    setError(null);
+  const resetState = useCallback(() => {
     setResult(null);
+    setError(null);
+    setStatus(null);
+    setProgress(null);
+    setLoading(false);
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    jobIdRef.current = null;
+  }, []);
+
+  useEffect(() => () => resetState(), [resetState]);
+
+  const pollStatus = useCallback(async () => {
+    const jobId = jobIdRef.current;
+    if (!jobId) return;
 
     try {
-      const response = await fetch("/api/evaluate", { method: "POST" });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || "Evaluation failed");
+      const controller = abortRef.current ?? new AbortController();
+      abortRef.current = controller;
+      const res = await fetch(`/api/evaluate/status?jobId=${encodeURIComponent(jobId)}`, {
+        method: "GET",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Failed to fetch job status");
       }
 
-      const data = (await response.json()) as EvaluationSummary;
-      setResult(data);
+      const data = (await res.json()) as JobStatusResponse;
+      abortRef.current = null;
+      setStatus(data.status);
+
+      if (data.status === "PROGRESS" && "progress" in data) {
+        setProgress(data.progress ?? null);
+      }
+
+      if (data.status === "SUCCESS" && "result" in data) {
+        setResult(data.result);
+        setLoading(false);
+        setProgress(null);
+        timeoutRef.current = null;
+        abortRef.current = null;
+        return;
+      }
+
+      if (data.status === "FAILURE" && "error" in data) {
+        setError(data.error || "Evaluation failed");
+        setLoading(false);
+        setProgress(null);
+        timeoutRef.current = null;
+        abortRef.current = null;
+        return;
+      }
+
+      timeoutRef.current = setTimeout(pollStatus, POLL_INTERVAL_MS);
+    } catch (err) {
+      if ((err as Error).name === "AbortError") {
+        return;
+      }
+      const message = err instanceof Error ? err.message : "Unknown error";
+      setError(message);
+      setLoading(false);
+    }
+  }, []);
+
+  const startEvaluation = useCallback(async () => {
+    const response = await fetch("/api/evaluate/start", { method: "POST" });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || "Evaluation start failed");
+    }
+    const data = (await response.json()) as { jobId: string };
+    return data.jobId;
+  }, []);
+
+  const runEvaluation = useCallback(async () => {
+    resetState();
+    setLoading(true);
+
+    try {
+      const jobId = await startEvaluation();
+      jobIdRef.current = jobId;
+      setStatus("PENDING");
+      setProgress(null);
+      pollStatus();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setError(message);
-    } finally {
       setLoading(false);
     }
-  }
+  }, [pollStatus, resetState, startEvaluation]);
 
   return (
     <div className="evaluation-page">
@@ -55,14 +149,21 @@ export default function EvaluatePage() {
           Generate a golden dataset from the shared movie data and evaluate the chat
           responses. Results include correctness and relevance metrics.
         </p>
-        <button
-          className="evaluation-button"
-          onClick={runEvaluation}
-          disabled={loading}
-        >
+        <button className="evaluation-button" onClick={runEvaluation} disabled={loading}>
           {loading ? "Running evaluation..." : "Run evaluation"}
         </button>
         {error && <div className="evaluation-error">Error: {error}</div>}
+        {loading && status && (
+          <div className="evaluation-progress">
+            Status: {status}
+            {progress?.i !== undefined && progress?.of ? (
+              <span>
+                {" "}- {progress.i}/{progress.of}
+                {progress.phase ? ` (${progress.phase})` : ""}
+              </span>
+            ) : null}
+          </div>
+        )}
       </div>
 
       {result && (
@@ -102,22 +203,14 @@ export default function EvaluatePage() {
                     <td>{detail.candidate}</td>
                     <td>
                       <div className="decision">
-                        <span className="decision-label">
-                          {detail.correctness.decision}
-                        </span>
-                        <span className="decision-reason">
-                          {detail.correctness.reasoning}
-                        </span>
+                        <span className="decision-label">{detail.correctness.decision}</span>
+                        <span className="decision-reason">{detail.correctness.reasoning}</span>
                       </div>
                     </td>
                     <td>
                       <div className="decision">
-                        <span className="decision-label">
-                          {detail.relevance.decision}
-                        </span>
-                        <span className="decision-reason">
-                          {detail.relevance.reasoning}
-                        </span>
+                        <span className="decision-label">{detail.relevance.decision}</span>
+                        <span className="decision-reason">{detail.relevance.reasoning}</span>
                       </div>
                     </td>
                   </tr>

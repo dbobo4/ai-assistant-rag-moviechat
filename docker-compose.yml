@@ -1,3 +1,5 @@
+name: ai-assistant-moviechat
+
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -9,6 +11,51 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: rag_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  rag_backend:
+    build:
+      context: ./rag_backend
+      dockerfile: Dockerfile
+    image: ai-assistant-moviechat-rag_backend
+    container_name: rag_backend
+    restart: unless-stopped
+    env_file:
+      - rag_backend/rag_backend.env
+    ports:
+      - "${UPLOADER_PORT:-8000}:8000"
+    volumes:
+      - movie_data_shared:/app/movie_data
+    depends_on:
+      - redis
+
+  celery_worker:
+    build:
+      context: ./rag_backend
+      dockerfile: Dockerfile
+    image: ai-assistant-moviechat-celery_worker
+    container_name: rag_celery_worker
+    restart: unless-stopped
+    working_dir: /app
+    env_file:
+      - rag_backend/rag_backend.env
+    environment:
+      PYTHONPATH: /app
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    depends_on:
+      - redis
+      - rag_backend
+    command: celery -A rag_backend.celery_app:celery_app worker -Q evalq -c 2 --loglevel=INFO
+    volumes:
+      - ./rag_backend:/app/rag_backend
+      - movie_data_shared:/app/movie_data
 
   app:
     build:
@@ -25,19 +72,6 @@ services:
       - rag_backend
     volumes:
       - movie_data_shared:/app/movie_data
-
-  rag_backend:
-    build:
-      context: ./rag_backend
-      dockerfile: Dockerfile
-    container_name: rag_backend
-    restart: unless-stopped
-    ports:
-      - "${UPLOADER_PORT:-8000}:8000"
-    volumes:
-      - movie_data_shared:/app/movie_data
-    env_file:
-      - rag_backend/rag_backend.env
 
   pgadmin:
     image: dpage/pgadmin4
@@ -56,6 +90,7 @@ volumes:
   postgres_data:
   pgadmin_data:
   movie_data_shared:
+
 
 
 # webapp: http://localhost:3000

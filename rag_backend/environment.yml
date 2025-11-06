@@ -16,4 +16,6 @@ dependencies:
       - beautifulsoup4
       - lxml
       - sentence-transformers
+      - redis
+      - celery[redis]
       - openai

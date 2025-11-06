@@ -62,6 +62,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Copy the application source
 COPY . .
 
+ENV PYTHONPATH=/app
+
 # Expose backend API port
 EXPOSE 8000
 
