@@ -312,6 +312,43 @@ textarea {
   color: #f9fafb;
 }
 
+.evaluation-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rag-header {
+  align-items: flex-end;
+  gap: 32px;
+}
+
+.rag-inputs {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.rag-inputs label {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  color: #cbd5f5;
+}
+
+.rag-inputs input {
+  margin-top: 4px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: rgba(15, 23, 42, 0.4);
+  color: #f9fafb;
+}
+
+.rag-header .evaluation-button {
+  white-space: nowrap;
+}
+
 .evaluation-subtitle {
   margin: 0;
   color: #cbd5f5;
@@ -517,6 +554,18 @@ textarea {
   .evaluation-summary {
     flex-direction: column;
     gap: 12px;
+  }
+
+  .rag-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .rag-inputs {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 10px;
   }
 }
 

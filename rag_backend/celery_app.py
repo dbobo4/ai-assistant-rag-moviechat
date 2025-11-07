@@ -10,7 +10,10 @@ celery_app = Celery(
     "rag_eval",
     broker=BROKER_URL,
     backend=RESULT_BACKEND,
-    include=["rag_backend.single_turn_evaluation"],  # direct include → reliable import
+    include=[
+        "rag_backend.single_turn_evaluation",
+        "rag_backend.rag_evalation",
+    ],
 )
 
 # --- Celery config ---

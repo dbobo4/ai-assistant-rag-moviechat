@@ -6,7 +6,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from reranking import router as reranking_router
-from single_turn_evaluation import router as evaluation_router  # <-- routert importálunk
+from single_turn_evaluation import router as evaluation_router
+from rag_evalation import router as rag_eval_router
 
 CHUNK_API_URL = os.getenv("CHUNK_API_URL", "http://app:3000/api/upload-chunks")
 DATA_DIR = Path(os.getenv("MOVIE_DATA_DIR", "/app/movie_data")).resolve()
@@ -16,6 +17,7 @@ app = FastAPI()
 # Moduláris felépítés: routerek bekötése
 app.include_router(reranking_router)
 app.include_router(evaluation_router)
+app.include_router(rag_eval_router)
 
 
 class FileReq(BaseModel):

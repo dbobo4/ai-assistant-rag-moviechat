@@ -21,7 +21,7 @@ function memSnapshot() {
   };
 }
 
-export async function POST(_req: NextRequest) {
+export async function POST(req: NextRequest) {
   const reqId =
     (globalThis.crypto as any)?.randomUUID?.() ??
     Math.random().toString(36).slice(2);
@@ -30,7 +30,6 @@ export async function POST(_req: NextRequest) {
   const t = () => Date.now() - started;
 
   const log = (msg: string, data: Record<string, unknown> = {}) => {
-    // Mindig JSON-szerű, könnyen grep-elhető
     console.log(
       `[API/EVAL][${reqId}] ${msg}`,
       JSON.stringify({ t_ms: t(), ...data })
@@ -56,11 +55,31 @@ export async function POST(_req: NextRequest) {
     mem: memSnapshot(),
   });
 
-  const env = getEnv();
-  const backendUrl = env.PY_BACKEND_URL ?? "http://rag_backend:8000";
-  const evaluateUrl = new URL("/evaluate-single-turn", backendUrl).toString();
+  let body: any = null;
+  try {
+    body = (await req.json()) ?? null;
+  } catch {
+    body = null;
+  }
 
-  log("Prepared evaluate URL", { evaluateUrl, backendUrl });
+  const env = getEnv();
+
+  const evalType =
+    (typeof body?.type === "string" && body.type) || "single-turn";
+  const limit =
+    typeof body?.limit === "number"
+      ? body.limit
+      : typeof body?.sampleSize === "number"
+      ? body.sampleSize
+      : undefined;
+  const topK =
+    typeof body?.topK === "number"
+      ? body.topK
+      : typeof body?.top_k === "number"
+      ? body.top_k
+      : undefined;
+
+  const backendUrl = env.PY_BACKEND_URL ?? "http://rag_backend:8000";
 
   // DNS feloldás (Docker hálózati anomáliák kirajzolására)
   try {
@@ -78,18 +97,97 @@ export async function POST(_req: NextRequest) {
     error("Abort signal fired", { timeoutMs });
   });
 
-  log("Dispatching fetch to backend", { timeoutMs });
+  if (evalType === "rag-level") {
+    // RAG: CELERY JOB indítás → { jobId }-t adunk vissza a UI-nak
+    const startUrl = new URL("/rag-level-job", backendUrl).toString();
+    log("Dispatching RAG job start", {
+      startUrl,
+      backendUrl,
+      limit,
+      topK,
+      timeoutMs,
+    });
+
+    let startResp: Response;
+    try {
+      startResp = await fetch(startUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Request-ID": reqId,
+        },
+        // Küldjük a paramétereket; az undefined mezőket a JSON nem fogja beírni
+        body: JSON.stringify({ limit, top_k: topK }),
+        signal,
+      });
+    } catch (e: any) {
+      const isAbort = e?.name === "AbortError";
+      error("RAG job start threw", {
+        name: e?.name,
+        message: e?.message,
+        stack: e?.stack,
+        isAbort,
+        mem: memSnapshot(),
+      });
+      const status = isAbort ? 504 : 502;
+      return new Response(
+        JSON.stringify({
+          error: isAbort ? "Evaluation timed out" : "Evaluation fetch failed",
+          reqId,
+        }),
+        { status, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!startResp.ok) {
+      const text = await startResp.text().catch(() => "Unknown error");
+      error("Backend responded non-OK for RAG job start", {
+        status: startResp.status,
+        body_preview: text.slice(0, 2000),
+      });
+      return new Response(
+        JSON.stringify({ error: text || "RAG job start failed", reqId }),
+        {
+          status: startResp.status,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    const startJson = await startResp.json().catch(() => null);
+    const jobId = startJson?.job_id || startJson?.jobId;
+    if (!jobId) {
+      error("No job_id returned by backend on RAG job start");
+      return new Response(
+        JSON.stringify({ error: "No job_id from backend", reqId }),
+        { status: 502, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    log("RAG job started", { jobId, elapsed_ms: t(), mem: memSnapshot() });
+    return new Response(JSON.stringify({ jobId, reqId }), {
+      status: 200,
+      headers: { "Content-Type": "application/json", "X-Request-ID": reqId },
+    });
+  }
+
+  // SINGLE-TURN: azonnali kiértékelés
+  const evaluateUrl = new URL("/evaluate-single-turn", backendUrl).toString();
+  log("Dispatching single-turn evaluate", {
+    evaluateUrl,
+    backendUrl,
+    timeoutMs,
+  });
 
   let response: Response | undefined;
   try {
     response = await fetch(evaluateUrl, {
       method: "POST",
-      // Korrelációs ID végig piping
       headers: { "X-Request-ID": reqId },
       signal,
     });
 
-    log("TTFB received", {
+    log("TTFB received (single-turn)", {
       status: response.status,
       ok: response.ok,
       headers: Object.fromEntries(response.headers.entries()),
@@ -97,7 +195,7 @@ export async function POST(_req: NextRequest) {
     });
   } catch (e: any) {
     const isAbort = e?.name === "AbortError";
-    error("Fetch threw", {
+    error("Fetch threw (single-turn)", {
       name: e?.name,
       message: e?.message,
       stack: e?.stack,
@@ -116,7 +214,7 @@ export async function POST(_req: NextRequest) {
 
   if (!response.ok) {
     const text = await response.text().catch(() => "Unknown error");
-    error("Backend responded non-OK", {
+    error("Backend responded non-OK (single-turn)", {
       status: response.status,
       body_preview: text.slice(0, 2000),
     });
@@ -126,19 +224,18 @@ export async function POST(_req: NextRequest) {
     );
   }
 
-  // OK ág
   let json: any;
   try {
     json = await response.json();
   } catch (e: any) {
-    error("Failed to parse backend JSON", { message: e?.message });
+    error("Failed to parse backend JSON (single-turn)", { message: e?.message });
     return new Response(
       JSON.stringify({ error: "Invalid JSON from backend", reqId }),
       { status: 502, headers: { "Content-Type": "application/json" } }
     );
   }
 
-  log("Success", {
+  log("Success (single-turn)", {
     total: json?.total,
     accuracy: json?.accuracy,
     relevance_rate: json?.relevance_rate,
