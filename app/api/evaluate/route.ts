@@ -79,6 +79,25 @@ export async function POST(req: NextRequest) {
       ? body.top_k
       : undefined;
 
+  const personaId =
+    typeof body?.persona_id === "string"
+      ? body.persona_id
+      : typeof body?.personaId === "string"
+      ? body.personaId
+      : "clarification_cooperative";
+  const goalId =
+    typeof body?.goal_id === "string"
+      ? body.goal_id
+      : typeof body?.goalId === "string"
+      ? body.goalId
+      : "specific-memory-recall";
+  const turns =
+    typeof body?.turns === "number"
+      ? body.turns
+      : typeof body?.turnCount === "number"
+      ? body.turnCount
+      : 4;
+
   const backendUrl = env.PY_BACKEND_URL ?? "http://rag_backend:8000";
 
   // DNS feloldás (Docker hálózati anomáliák kirajzolására)
@@ -165,6 +184,83 @@ export async function POST(req: NextRequest) {
     }
 
     log("RAG job started", { jobId, elapsed_ms: t(), mem: memSnapshot() });
+    return new Response(JSON.stringify({ jobId, reqId }), {
+      status: 200,
+      headers: { "Content-Type": "application/json", "X-Request-ID": reqId },
+    });
+  }
+
+  if (evalType === "user-satisfaction") {
+    const startUrl = new URL("/user-satisfaction-job", backendUrl).toString();
+    log("Dispatching user satisfaction job start", {
+      startUrl,
+      backendUrl,
+      personaId,
+      goalId,
+      turns,
+      timeoutMs,
+    });
+
+    let startResp: Response;
+    try {
+      startResp = await fetch(startUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Request-ID": reqId,
+        },
+        body: JSON.stringify({
+          persona_id: personaId,
+          goal_id: goalId,
+          turns,
+        }),
+        signal,
+      });
+    } catch (e: any) {
+      const isAbort = e?.name === "AbortError";
+      error("User satisfaction job start threw", {
+        name: e?.name,
+        message: e?.message,
+        stack: e?.stack,
+        isAbort,
+        mem: memSnapshot(),
+      });
+      const status = isAbort ? 504 : 502;
+      return new Response(
+        JSON.stringify({
+          error: isAbort ? "Evaluation timed out" : "Evaluation fetch failed",
+          reqId,
+        }),
+        { status, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!startResp.ok) {
+      const text = await startResp.text().catch(() => "Unknown error");
+      error("Backend responded non-OK for user satisfaction job start", {
+        status: startResp.status,
+        body_preview: text.slice(0, 2000),
+      });
+      return new Response(
+        JSON.stringify({ error: text || "User satisfaction job start failed", reqId }),
+        {
+          status: startResp.status,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    const startJson = await startResp.json().catch(() => null);
+    const jobId = startJson?.job_id || startJson?.jobId;
+    if (!jobId) {
+      error("No job_id returned by backend on user satisfaction job start");
+      return new Response(
+        JSON.stringify({ error: "No job_id from backend", reqId }),
+        { status: 502, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    log("User satisfaction job started", { jobId, elapsed_ms: t(), mem: memSnapshot() });
     return new Response(JSON.stringify({ jobId, reqId }), {
       status: 200,
       headers: { "Content-Type": "application/json", "X-Request-ID": reqId },

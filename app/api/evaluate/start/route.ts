@@ -15,40 +15,51 @@ export async function POST(req: NextRequest) {
   }
 
   const type = (typeof body?.type === "string" && body.type) || "single-turn";
-
-  // Single-turn: /evaluate-job   |   RAG-level: /rag-level-job
   const isRag = type === "rag-level";
-  const path = isRag ? "/rag-level-job" : "/evaluate-job";
+  const isUserSat = type === "user-satisfaction";
+
+  const path = isRag
+    ? "/rag-level-job"
+    : isUserSat
+    ? "/user-satisfaction-job"
+    : "/evaluate-job";
   const url = new URL(path, backendUrl).toString();
 
-  // RAG-hez opcionális paraméterek (limit, top_k)
-  const payload = isRag
-    ? {
-        // a backend mindkét kulcsnevet érti (limit/top_k)
-        limit:
-          typeof body?.limit === "number"
-            ? body.limit
-            : typeof body?.sampleSize === "number"
-            ? body.sampleSize
-            : undefined,
-        top_k:
-          typeof body?.top_k === "number"
-            ? body.top_k
-            : typeof body?.topK === "number"
-            ? body.topK
-            : undefined,
-      }
-    : undefined;
+  let payload: any = undefined;
+  if (isRag) {
+    payload = {
+      limit:
+        typeof body?.limit === "number"
+          ? body.limit
+          : typeof body?.sampleSize === "number"
+          ? body.sampleSize
+          : undefined,
+      top_k:
+        typeof body?.top_k === "number"
+          ? body.top_k
+          : typeof body?.topK === "number"
+          ? body.topK
+          : undefined,
+    };
+  } else if (isUserSat) {
+    payload = {
+      persona_id: body?.persona_id ?? body?.personaId ?? "clarification_cooperative",
+      goal_id: body?.goal_id ?? body?.goalId ?? "specific-memory-recall",
+      turns:
+        typeof body?.turns === "number" ? body.turns : typeof body?.turnCount === "number" ? body.turnCount : 4,
+    };
+  }
 
-  console.log("[API/EVAL/START] enqueue", { url, isRag, payload });
+  console.log("[API/EVAL/START] enqueue", { url, type, payload });
 
-  const fetchInit: RequestInit = isRag
-    ? {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }
-    : { method: "POST" };
+  const fetchInit: RequestInit =
+    isRag || isUserSat
+      ? {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }
+      : { method: "POST" };
 
   const response = await fetch(url, fetchInit);
   console.log("[API/EVAL/START] status", { status: response.status });

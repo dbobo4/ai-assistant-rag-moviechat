@@ -13,6 +13,7 @@ celery_app = Celery(
     include=[
         "rag_backend.single_turn_evaluation",
         "rag_backend.rag_evalation",
+        "rag_backend.user_satisfaction_evaluation.user_satisfaction_evaluation"
     ],
 )
 

@@ -57,31 +57,39 @@ export async function GET(req: NextRequest) {
   const backendUrl = env.PY_BACKEND_URL ?? "http://rag_backend:8000";
 
   // Mindkét backend státuszt lekérdezzük:
-  const ragUrl = new URL(`/rag-level-job/${jobId}`, backendUrl).toString();
   const stUrl = new URL(`/evaluate-job/${jobId}`, backendUrl).toString();
+  const ragUrl = new URL(`/rag-level-job/${jobId}`, backendUrl).toString();
+  const userUrl = new URL(`/user-satisfaction-job/${jobId}`, backendUrl).toString();
 
-  console.log("[API/EVAL/STATUS] fetch both", { ragUrl, stUrl });
+  console.log("[API/EVAL/STATUS] fetch all", { stUrl, ragUrl, userUrl });
 
-  const [rag, st] = await Promise.all([fetchStatus(ragUrl), fetchStatus(stUrl)]);
+  const [st, rag, user] = await Promise.all([
+    fetchStatus(stUrl),
+    fetchStatus(ragUrl),
+    fetchStatus(userUrl),
+  ]);
 
-  // Ha egyik sem OK, hibát adunk vissza (a rag prioritást élvez a hibaüzenetben)
-  if (!rag.ok && !st.ok) {
+  if (!st.ok && !rag.ok && !user.ok) {
     return new Response(
       JSON.stringify({
         error:
-          (rag.text && `RAG error: ${rag.text}`) ||
           (st.text && `Single-turn error: ${st.text}`) ||
+          (rag.text && `RAG error: ${rag.text}`) ||
+          (user.text && `User satisfaction error: ${user.text}`) ||
           "Unable to fetch job status",
       }),
       {
-        status: Math.max(rag.status, st.status),
+        status: Math.max(st.status, rag.status, user.status),
         headers: { "Content-Type": "application/json" },
       }
     );
   }
 
-  // Válasszuk a “jobb” állapotot (SUCCESS/FAILURE/PROGRESS előnyt élvez PENDING-del szemben)
-  const chosen = betterOf(rag.json, st.json) || rag.json || st.json;
+  const chosen =
+    [st.json, rag.json, user.json].reduce((acc, cur) => betterOf(acc, cur), null) ||
+    st.json ||
+    rag.json ||
+    user.json;
 
   return new Response(JSON.stringify(chosen ?? { status: "PENDING" }), {
     status: 200,

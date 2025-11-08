@@ -183,17 +183,6 @@ def rag_level_job(self, *, top_k: Optional[int] = None, limit: Optional[int] = N
   return result
 
 
-@router.post("/evaluate-rag")
-def evaluate_rag_endpoint(body: Dict[str, Any]):
-  top_k = int(body.get("top_k") or body.get("topK") or DEFAULT_TOPK)
-  limit = int(body.get("limit") or DEFAULT_LIMIT)
-  try:
-    return evaluate_rag_level(top_k, limit)
-  except Exception as exc:
-    log.error("evaluate_rag_endpoint failed", exc_info=exc)
-    raise HTTPException(status_code=500, detail=str(exc))
-
-
 @router.post("/rag-level-job")
 def start_rag_job(body: Dict[str, Any]):
   top_k = int(body.get("top_k") or body.get("topK") or DEFAULT_TOPK)
