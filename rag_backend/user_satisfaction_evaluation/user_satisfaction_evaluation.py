@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from celery.result import AsyncResult
+from dataclasses import asdict
 
 from .assistant_client import AssistantConversationRunner
 from .personas import PERSONAS
@@ -119,3 +120,25 @@ def evaluate_user_satisfaction(payload: Dict[str, Any]):
     turns = int(payload.get("turns", 4))
     _validate_inputs(persona_id, goal_id, turns)
     return _run_user_satisfaction(persona_id, goal_id, turns)
+
+
+@router.get("/user-satisfaction/personas")
+def list_personas():
+    return {
+        "personas": [
+            {**data, "slug": data.get("id"), "id": key}
+            for key, persona in PERSONAS.items()
+            for data in (asdict(persona),)
+        ]
+    }
+
+
+@router.get("/user-satisfaction/goals")
+def list_goals():
+    return {
+        "goals": [
+            {**data, "slug": data.get("id"), "id": key}
+            for key, goal in GOALS.items()
+            for data in (asdict(goal),)
+        ]
+    }

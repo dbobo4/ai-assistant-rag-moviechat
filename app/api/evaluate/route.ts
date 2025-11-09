@@ -348,3 +348,67 @@ export async function POST(req: NextRequest) {
     headers: { "Content-Type": "application/json", "X-Request-ID": reqId },
   });
 }
+
+export async function GET(req: NextRequest) {
+  const reqId =
+    (globalThis.crypto as any)?.randomUUID?.() ??
+    Math.random().toString(36).slice(2);
+  const started = Date.now();
+  const t = () => Date.now() - started;
+  const log = (msg: string, data: Record<string, unknown> = {}) =>
+    console.log(
+      `[API/EVAL][${reqId}] ${msg}`,
+      JSON.stringify({ t_ms: t(), ...data })
+    );
+  const error = (msg: string, data: Record<string, unknown> = {}) =>
+    console.error(
+      `[API/EVAL][${reqId}] ${msg}`,
+      JSON.stringify({ t_ms: t(), ...data })
+    );
+
+  const env = getEnv();
+  const backendUrl = env.PY_BACKEND_URL ?? "http://rag_backend:8000";
+
+  const personasUrl = new URL(
+    "/user-satisfaction/personas",
+    backendUrl
+  ).toString();
+  const goalsUrl = new URL("/user-satisfaction/goals", backendUrl).toString();
+
+  try {
+    const [personasResp, goalsResp] = await Promise.all([
+      fetch(personasUrl),
+      fetch(goalsUrl),
+    ]);
+
+    if (!personasResp.ok) {
+      const text = await personasResp.text();
+      throw new Error(
+        `Personas endpoint failed (${personasResp.status}): ${text}`
+      );
+    }
+    if (!goalsResp.ok) {
+      const text = await goalsResp.text();
+      throw new Error(`Goals endpoint failed (${goalsResp.status}): ${text}`);
+    }
+
+    const personasJson = await personasResp.json();
+    const goalsJson = await goalsResp.json();
+
+    log("Fetched user satisfaction metadata");
+    return new Response(
+      JSON.stringify({
+        personas: personasJson?.personas ?? [],
+        goals: goalsJson?.goals ?? [],
+        reqId,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  } catch (e: any) {
+    error("Failed to fetch metadata", { message: e?.message });
+    return new Response(
+      JSON.stringify({ error: e?.message || "Failed to fetch metadata", reqId }),
+      { status: 502, headers: { "Content-Type": "application/json" } }
+    );
+  }
+}

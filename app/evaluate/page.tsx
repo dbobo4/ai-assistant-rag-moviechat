@@ -83,6 +83,105 @@ type UserEvalStatusResponse =
   | { status: "SUCCESS"; result: UserEvalSummary }
   | { status: "FAILURE"; error?: string };
 
+type PersonaOption = {
+  id: string;
+  name?: string;
+  title?: string;
+  label?: string;
+  display_name?: string;
+  description?: string;
+  summary?: string;
+  persona_name?: string;
+  persona_description?: string;
+  [key: string]: unknown;
+};
+
+type GoalOption = {
+  id: string;
+  name?: string;
+  title?: string;
+  label?: string;
+  display_name?: string;
+  description?: string;
+  summary?: string;
+  goal_description?: string;
+  goal_name?: string;
+  [key: string]: unknown;
+};
+
+type EvaluateMetadataResponse = {
+  personas?: Record<string, PersonaOption> | Array<PersonaOption & { id?: string }>;
+  goals?: Record<string, GoalOption> | Array<GoalOption & { id?: string }>;
+};
+
+type MetadataPayload<T extends Record<string, any>> =
+  | Record<string, T>
+  | Array<T & { id?: string }>;
+
+function normalizeMetadata<T extends Record<string, any>>(
+  input?: MetadataPayload<T>
+): Array<T & { id: string }> {
+  if (!input) return [];
+
+  const items = Array.isArray(input)
+    ? input
+    : Object.entries(input).map(([id, value]) => ({ ...value, id }));
+
+  return items
+    .map((item) => {
+      const id =
+        item.id ??
+        (item as { slug?: string }).slug ??
+        (item as { key?: string }).key ??
+        (item as { persona_id?: string }).persona_id ??
+        (item as { goal_id?: string }).goal_id ??
+        (item as { identifier?: string }).identifier;
+      if (!id) {
+        return null;
+      }
+      return { ...item, id };
+    })
+    .filter((item): item is T & { id: string } => Boolean(item));
+}
+
+function getPersonaLabel(persona: PersonaOption): string {
+  return (
+    (persona.name as string | undefined) ??
+    (persona.title as string | undefined) ??
+    (persona.display_name as string | undefined) ??
+    (persona.label as string | undefined) ??
+    (persona.persona_name as string | undefined) ??
+    persona.id
+  );
+}
+
+function getPersonaDescription(persona: PersonaOption): string | undefined {
+  return (
+    (persona.description as string | undefined) ??
+    (persona.summary as string | undefined) ??
+    (persona.persona_description as string | undefined)
+  );
+}
+
+function getGoalLabel(goal: GoalOption): string {
+  return (
+    (goal.name as string | undefined) ??
+    (goal.title as string | undefined) ??
+    (goal.display_name as string | undefined) ??
+    (goal.label as string | undefined) ??
+    (goal.goal_name as string | undefined) ??
+    goal.id
+  );
+}
+
+function getGoalDescription(goal: GoalOption): string | undefined {
+  return (
+    (goal.description as string | undefined) ??
+    (goal.summary as string | undefined) ??
+    (goal.goal_description as string | undefined)
+  );
+}
+
 const POLL_INTERVAL_MS = 2000;
 const DEFAULT_RAG_SAMPLE = Number(process.env.NEXT_PUBLIC_RAG_LEVEL_SAMPLE_CHUNKS ?? "20");
 const DEFAULT_RAG_TOPK = Number(process.env.NEXT_PUBLIC_RAG_LEVEL_TOP_K ?? "5");
@@ -108,6 +207,10 @@ export default function EvaluatePage() {
   const ragAbortRef = useRef<AbortController | null>(null);
   const ragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  const [personaOptions, setPersonaOptions] = useState<PersonaOption[]>([]);
+  const [goalOptions, setGoalOptions] = useState<GoalOption[]>([]);
+  const [metaError, setMetaError] = useState<string | null>(null);
+  const [metaLoading, setMetaLoading] = useState(false);
   const [personaId, setPersonaId] = useState("clarification_cooperative");
   const [goalId, setGoalId] = useState("specific-memory-recall");
   const [turns, setTurns] = useState(4);
@@ -239,6 +342,59 @@ export default function EvaluatePage() {
   }, []);
 
   useEffect(() => () => resetRagState(), [resetRagState]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let mounted = true;
+
+    async function loadMetadata() {
+      try {
+        setMetaLoading(true);
+        setMetaError(null);
+        const res = await fetch("/api/evaluate", {
+          method: "GET",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || "Failed to load evaluation metadata");
+        }
+        const data = (await res.json()) as EvaluateMetadataResponse;
+        if (!mounted) return;
+        const personaList = normalizeMetadata(data.personas);
+        const goalList = normalizeMetadata(data.goals);
+        setPersonaOptions(personaList);
+        setGoalOptions(goalList);
+        setPersonaId((prev) => {
+          if (personaList.length === 0) return prev;
+          return personaList.some((option) => option.id === prev) ? prev : personaList[0].id;
+        });
+        setGoalId((prev) => {
+          if (goalList.length === 0) return prev;
+          return goalList.some((option) => option.id === prev) ? prev : goalList[0].id;
+        });
+      } catch (error) {
+        if ((error as Error).name === "AbortError") {
+          return;
+        }
+        if (mounted) {
+          setMetaError(error instanceof Error ? error.message : "Failed to load evaluation metadata");
+        }
+      } finally {
+        if (mounted) {
+          setMetaLoading(false);
+        }
+      }
+    }
+
+    loadMetadata();
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, []);
 
   const startRagEvaluation = useCallback(async () => {
     const response = await fetch("/api/evaluate", {
@@ -632,12 +788,44 @@ export default function EvaluatePage() {
           </div>
           <div className="rag-inputs user-eval-inputs">
             <label>
-              <span>Persona ID</span>
-              <input value={personaId} onChange={(event) => setPersonaId(event.target.value)} />
+              <span>Persona</span>
+              <select
+                value={personaId}
+                onChange={(event) => setPersonaId(event.target.value)}
+                disabled={metaLoading && personaOptions.length === 0}
+              >
+                {personaOptions.length === 0 ? (
+                  <option value={personaId}>{metaLoading ? "Loading personas..." : personaId}</option>
+                ) : (
+                  personaOptions.map((persona) => (
+                    <option
+                      key={persona.id}
+                      value={persona.id}
+                      title={getPersonaDescription(persona) ?? ""}
+                    >
+                      {getPersonaLabel(persona)}
+                    </option>
+                  ))
+                )}
+              </select>
             </label>
             <label>
-              <span>Goal ID</span>
-              <input value={goalId} onChange={(event) => setGoalId(event.target.value)} />
+              <span>Goal</span>
+              <select
+                value={goalId}
+                onChange={(event) => setGoalId(event.target.value)}
+                disabled={metaLoading && goalOptions.length === 0}
+              >
+                {goalOptions.length === 0 ? (
+                  <option value={goalId}>{metaLoading ? "Loading goals..." : goalId}</option>
+                ) : (
+                  goalOptions.map((goal) => (
+                    <option key={goal.id} value={goal.id} title={getGoalDescription(goal) ?? ""}>
+                      {getGoalLabel(goal)}
+                    </option>
+                  ))
+                )}
+              </select>
             </label>
             <label>
               <span>Turns</span>
@@ -654,6 +842,10 @@ export default function EvaluatePage() {
             </button>
           </div>
         </div>
+
+        {metaError && (
+          <div className="evaluation-error">Failed to load persona/goal metadata: {metaError}</div>
+        )}
 
         {userEvalError && <div className="evaluation-error">Error: {userEvalError}</div>}
         {userEvalLoading && userEvalStatus && (
