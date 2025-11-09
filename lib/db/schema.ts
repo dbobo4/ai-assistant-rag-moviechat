@@ -14,3 +14,13 @@ export const embeddings = pgTable("embeddings", {
     .references(() => resources.id, { onDelete: "cascade" }),
   embedding: vector("embedding", { dimensions: 1536 }).notNull(),
 });
+
+export const monitoring = pgTable("monitoring", {
+  id: serial("id").primaryKey(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  origin: text("origin").notNull(),
+  model: text("model"),
+  totalTokens: integer("total_tokens"),
+  totalLatencyMs: integer("total_latency_ms"),
+});
+

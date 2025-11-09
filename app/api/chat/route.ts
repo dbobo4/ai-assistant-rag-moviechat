@@ -82,6 +82,59 @@ type HistoryMessage = {
   content: string;
 };
 
+type MonitoringEventPayload = {
+  origin: string;
+  model?: string | null;
+  totalTokens?: number | null;
+  totalLatencyMs?: number | null;
+};
+
+function resolveMonitoringEndpoint(req: NextRequest): string | null {
+  try {
+    return new URL("/api/monitoring", req.nextUrl.origin).toString();
+  } catch {
+    // fall back to env-provided base URL
+  }
+
+  const fallbackBase = process.env.APP_BASE_URL ?? process.env.NEXT_PUBLIC_APP_URL;
+  if (fallbackBase) {
+    try {
+      return new URL("/api/monitoring", fallbackBase).toString();
+    } catch {
+      // ignore
+    }
+  }
+
+  return null;
+}
+
+async function recordMonitoringEvent(
+  endpoint: string | null,
+  payload: MonitoringEventPayload
+) {
+  if (!endpoint) {
+    return;
+  }
+
+  try {
+    await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        origin: payload.origin,
+        model: payload.model ?? undefined,
+        totalTokens: payload.totalTokens ?? undefined,
+        totalLatencyMs: payload.totalLatencyMs ?? undefined,
+      }),
+      cache: "no-store",
+    });
+  } catch (error) {
+    console.warn("[chat] monitoring logging failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export async function POST(req: NextRequest) {
   let body: unknown;
   try {
@@ -123,6 +176,8 @@ export async function POST(req: NextRequest) {
   ];
 
   let toolUsed = false;
+  const monitoringEndpoint = resolveMonitoringEndpoint(req);
+
 
   for (let step = 0; step < 3; step++) {
     try {
@@ -131,12 +186,19 @@ export async function POST(req: NextRequest) {
         historyCount: history.length,
       });
 
+      const apiStart = Date.now();
       const completion = await client.chat.completions.create({
         model: CHAT_MODEL,
         temperature: 0.3,
         messages,
         tools,
         tool_choice: toolUsed ? "none" : "auto",
+      });
+      await recordMonitoringEvent(monitoringEndpoint, {
+        origin: "chat",
+        model: completion.model ?? CHAT_MODEL,
+        totalTokens: completion.usage?.total_tokens ?? null,
+        totalLatencyMs: Date.now() - apiStart,
       });
 
       const msg = completion.choices[0]?.message;
