@@ -673,27 +673,27 @@ export default function EvaluatePage() {
             <div className="evaluation-summary">
               <div>
                 <span className="summary-label">Goal achieved:</span>{" "}
-                {(userEvalResult.summary.goal_achieved_rate * 100).toFixed(1)}%
+                {userEvalResult.summary.goal_achieved_rate.toFixed(1)}%
               </div>
               <div>
                 <span className="summary-label">Avg satisfaction:</span>{" "}
-                {userEvalResult.summary.avg_satisfaction.toFixed(2)}
+                {userEvalResult.summary.avg_satisfaction.toFixed(1)}%
               </div>
               <div>
                 <span className="summary-label">Avg clarity:</span>{" "}
-                {userEvalResult.summary.avg_clarity.toFixed(2)}
+                {userEvalResult.summary.avg_clarity.toFixed(1)}%
               </div>
               <div>
                 <span className="summary-label">Avg relevance:</span>{" "}
-                {userEvalResult.summary.avg_relevance.toFixed(2)}
+                {userEvalResult.summary.avg_relevance.toFixed(1)}%
               </div>
               <div>
                 <span className="summary-label">Avg completeness:</span>{" "}
-                {userEvalResult.summary.avg_completeness.toFixed(2)}
+                {userEvalResult.summary.avg_completeness.toFixed(1)}%
               </div>
               <div>
                 <span className="summary-label">Total frustration:</span>{" "}
-                userEvalResult.summary.total_frustration
+                {userEvalResult.summary.total_frustration}
               </div>
             </div>
 
@@ -716,10 +716,26 @@ export default function EvaluatePage() {
                       <td>{turn.turn}</td>
                       <td>{turn.user_message}</td>
                       <td>{turn.assistant_message}</td>
-                      <td>{turn.metrics?.user_satisfaction_score}</td>
-                      <td>{turn.metrics?.clarity_score}</td>
-                      <td>{turn.metrics?.relevance_score}</td>
-                      <td>{turn.metrics?.completeness_score}</td>
+                      <td>
+                        {turn.metrics?.user_satisfaction_score !== undefined
+                          ? `${Number(turn.metrics.user_satisfaction_score).toFixed(2)}%`
+                          : "—"}
+                      </td>
+                      <td>
+                        {turn.metrics?.clarity_score !== undefined
+                          ? `${Number(turn.metrics.clarity_score).toFixed(2)}%`
+                          : "—"}
+                      </td>
+                      <td>
+                        {turn.metrics?.relevance_score !== undefined
+                          ? `${Number(turn.metrics.relevance_score).toFixed(2)}%`
+                          : "—"}
+                      </td>
+                      <td>
+                        {turn.metrics?.completeness_score !== undefined
+                          ? `${Number(turn.metrics.completeness_score).toFixed(2)}%`
+                          : "—"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

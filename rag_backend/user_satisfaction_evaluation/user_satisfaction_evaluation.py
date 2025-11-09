@@ -36,7 +36,7 @@ def _summarize_metrics(per_turn: List[Dict[str, Any]]) -> Dict[str, Any]:
     total_frustr = sum(int(m.get("frustration_incidents", 0)) for m in per_turn)
 
     return {
-        "goal_achieved_rate": goal_hits / n,
+        "goal_achieved_rate": (goal_hits / n) * 100,
         "avg_satisfaction": avg("user_satisfaction_score"),
         "avg_clarity": avg("clarity_score"),
         "avg_relevance": avg("relevance_score"),

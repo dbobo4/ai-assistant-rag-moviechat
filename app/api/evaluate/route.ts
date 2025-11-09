@@ -267,8 +267,12 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // SINGLE-TURN: azonnali kiértékelés
-  const evaluateUrl = new URL("/evaluate-single-turn", backendUrl).toString();
+  let endpoint = "/evaluate-single-turn";
+  if (evalType === "user-satisfaction") {
+    endpoint = "/evaluate-user-satisfaction";
+  }
+
+  const evaluateUrl = new URL(endpoint, backendUrl).toString();
   log("Dispatching single-turn evaluate", {
     evaluateUrl,
     backendUrl,

@@ -67,5 +67,10 @@ ENV PYTHONPATH=/app
 # Expose backend API port
 EXPOSE 8000
 
+# Enable detailed logging
+ENV USER_EVAL_LOG_LEVEL=DEBUG
+ENV PYTHONUNBUFFERED=1
+
 # Longer keep-alive to handle long-running evaluations
-CMD ["uvicorn", "upload_docs:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "120"]
+CMD ["uvicorn", "upload_docs:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "120", "--log-level", "debug"]
+
