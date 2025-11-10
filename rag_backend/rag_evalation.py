@@ -4,7 +4,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 import requests
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter
 from celery.result import AsyncResult
 from openai import OpenAI
 
@@ -33,178 +33,189 @@ openai_client = OpenAI()
 
 
 def _truncate(text: str, limit: int = 120) -> str:
-  if len(text) <= limit:
-    return text
-  return text[: limit - 3] + "..."
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
 
 
 def fetch_samples(limit: int) -> List[Dict[str, Any]]:
-  try:
-    # A Next route POST-ot vár és {items: [...]}-t ad vissza
-    resp = requests.post(
-      SAMPLES_ENDPOINT,
-      json={"limit": limit},
-      timeout=HTTP_TIMEOUT,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    if isinstance(data, dict) and isinstance(data.get("items"), list):
-      return data["items"]
-    if isinstance(data, list):  # védelem, ha valahol mégis listát adsz vissza
-      return data
-    log.warning("Samples endpoint returned unexpected payload shape")
-  except Exception as exc:
-    log.error("Failed to fetch samples", exc_info=exc)
-  return []
+    try:
+        resp = requests.post(
+            SAMPLES_ENDPOINT,
+            json={"limit": limit},
+            timeout=HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            return data["items"]
+        if isinstance(data, list):
+            return data
+        log.warning("Samples endpoint returned unexpected payload shape")
+    except Exception as exc:
+        log.error("Failed to fetch samples", exc_info=exc)
+    return []
 
 
 def call_retriever(question: str, top_k: int) -> List[Dict[str, Any]]:
-  payload = {"question": question, "topK": top_k}
-  try:
-    resp = requests.post(
-      RETRIEVER_ENDPOINT,
-      json=payload,
-      timeout=HTTP_TIMEOUT,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    # A Next retriever {results: [...]}-t ad vissza
-    if isinstance(data, dict) and isinstance(data.get("results"), list):
-      return data["results"]
-    if isinstance(data, list):  # kompatibilitás régi formátummal
-      return data
-    log.warning("Retriever endpoint returned unexpected payload shape")
-  except Exception as exc:
-    log.error("Retriever request failed", exc_info=exc)
-  return []
+    payload = {"question": question, "topK": top_k}
+    try:
+        resp = requests.post(
+            RETRIEVER_ENDPOINT,
+            json=payload,
+            timeout=HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, dict) and isinstance(data.get("results"), list):
+            return data["results"]
+        if isinstance(data, list):
+            return data
+        log.warning("Retriever endpoint returned unexpected payload shape")
+    except Exception as exc:
+        log.error("Retriever request failed", exc_info=exc)
+    return []
 
 
 def generate_query(text: str) -> str:
-  prompt = QUERY_PROMPT.format(document=text)
-  response = openai_client.chat.completions.create(
-    model=OPENAI_MODEL,
-    messages=[{"role": "user", "content": prompt}],
-    temperature=0.3,
-  )
-  return (response.choices[0].message.content or "").strip()
+    prompt = QUERY_PROMPT.format(document=text)
+    response = openai_client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+    )
+    return (response.choices[0].message.content or "").strip()
 
 
 def evaluate_rag_level(top_k: int, limit: int) -> Dict[str, Any]:
-  samples = fetch_samples(limit)
-  if not samples:
+    samples = fetch_samples(limit)
+    if not samples:
+        return {
+            "metrics": {
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1_score": 0.0,
+                "total_queries": 0,
+                "relevant_retrieved": 0,
+            },
+            "details": [],
+        }
+
+    total = 0
+    hits = 0
+    precision_sum = 0.0
+    details: List[Dict[str, Any]] = []
+
+    for sample in samples:
+        text = sample.get("text") or sample.get("content")
+        if not text:
+            continue
+
+        try:
+            query = generate_query(text)
+        except Exception as exc:
+            log.error("Query generation failed", exc_info=exc)
+            continue
+
+        total += 1
+        retrieved = call_retriever(query, top_k)
+
+        source_meta = sample.get("metadata") or {}
+        source_idx = source_meta.get("chunk_index") if isinstance(source_meta, dict) else None
+        fallback_id = sample.get("id")
+
+        retrieved_indices: List[int] = []
+        retrieved_ids: List[Any] = []
+
+        # Determine rank (1-based) and how many relevant items are present among the top-k
+        rank: Optional[int] = None
+        rel_count = 0
+
+        for i, item in enumerate(retrieved, start=1):
+            meta = item.get("metadata") or {}
+            if isinstance(meta, dict) and "chunk_index" in meta:
+                retrieved_indices.append(meta["chunk_index"])
+            retrieved_ids.append(item.get("id"))
+
+            is_hit = False
+            if source_idx is not None and isinstance(meta, dict) and meta.get("chunk_index") == source_idx:
+                is_hit = True
+            elif source_idx is None and fallback_id is not None and item.get("id") == fallback_id:
+                is_hit = True
+
+            if is_hit:
+                rel_count += 1
+                if rank is None:
+                    rank = i  # first relevant position (1-based)
+
+        hit = rank is not None and rank <= top_k
+        if hit:
+            hits += 1
+
+        # Precision@k per query: relevant found within the top-k divided by k (use requested k)
+        pq_precision = (rel_count / float(top_k)) if top_k > 0 else 0.0
+        precision_sum += pq_precision
+
+        details.append(
+            {
+                "source_chunk_index": source_idx if source_idx is not None else fallback_id,
+                "generated_query": query,
+                "retrieved_chunk_indices": retrieved_indices or retrieved_ids,
+                "match": hit,  # hit@k
+                "rank": rank,  # 1-based rank of first relevant; None if not found
+                "precision_at_k": pq_precision,
+                "source_preview": _truncate(text),
+                "result_preview": _truncate(retrieved[0].get("content", "")) if retrieved else "",
+            }
+        )
+
+    precision = (precision_sum / total) if total else 0.0
+    recall = (hits / total) if total else 0.0
+    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+
     return {
-      "metrics": {
-        "precision": 0,
-        "recall": 0,
-        "f1_score": 0,
-        "total_queries": 0,
-        "relevant_retrieved": 0,
-      },
-      "details": [],
+        "metrics": {
+            "precision": precision,
+            "recall": recall,
+            "f1_score": f1,
+            "total_queries": total,
+            "relevant_retrieved": hits,
+        },
+        "details": details,
     }
-
-  total = 0
-  matches = 0
-  details: List[Dict[str, Any]] = []
-
-  for sample in samples:
-    text = sample.get("text") or sample.get("content")
-    if not text:
-      continue
-
-    try:
-      query = generate_query(text)
-    except Exception as exc:
-      log.error("Query generation failed", exc_info=exc)
-      continue
-
-    total += 1
-    retrieved = call_retriever(query, top_k)
-
-    source_meta = sample.get("metadata") or {}
-    source_idx = (
-      source_meta.get("chunk_index")
-      if isinstance(source_meta, dict)
-      else None
-    )
-    fallback_id = sample.get("id")
-
-    retrieved_indices: List[int] = []
-    retrieved_ids: List[Any] = []
-
-    for item in retrieved:
-      meta = item.get("metadata") or {}
-      if isinstance(meta, dict) and "chunk_index" in meta:
-        retrieved_indices.append(meta["chunk_index"])
-      retrieved_ids.append(item.get("id"))
-
-    match = False
-    if source_idx is not None:
-      match = source_idx in retrieved_indices
-    elif fallback_id is not None:
-      match = fallback_id in retrieved_ids
-
-    if match:
-      matches += 1
-
-    details.append(
-      {
-        "source_chunk_index": source_idx if source_idx is not None else fallback_id,
-        "generated_query": query,
-        "retrieved_chunk_indices": retrieved_indices or retrieved_ids,
-        "match": match,
-        "source_preview": _truncate(text),
-        "result_preview": _truncate(retrieved[0].get("content", "")) if retrieved else "",
-      }
-    )
-
-  precision = matches / total if total else 0
-  recall = precision
-  f1 = (2 * precision * recall / (precision + recall)) if precision + recall > 0 else 0
-
-  return {
-    "metrics": {
-      "precision": precision,
-      "recall": recall,
-      "f1_score": f1,
-      "total_queries": total,
-      "relevant_retrieved": matches,
-    },
-    "details": details,
-  }
 
 
 @celery_app.task(bind=True, name="tasks.rag_level_job")
 def rag_level_job(self, *, top_k: Optional[int] = None, limit: Optional[int] = None):
-  top = top_k or DEFAULT_TOPK
-  lim = limit or DEFAULT_LIMIT
-  result = evaluate_rag_level(top, lim)
-  self.update_state(state="SUCCESS", meta=result)
-  return result
+    top = top_k or DEFAULT_TOPK
+    lim = limit or DEFAULT_LIMIT
+    result = evaluate_rag_level(top, lim)
+    self.update_state(state="SUCCESS", meta=result)
+    return result
 
 
 @router.post("/rag-level-job")
 def start_rag_job(body: Dict[str, Any]):
-  top_k = int(body.get("top_k") or body.get("topK") or DEFAULT_TOPK)
-  limit = int(body.get("limit") or DEFAULT_LIMIT)
-  task = rag_level_job.apply_async(kwargs={"top_k": top_k, "limit": limit}, queue="evalq")
-  return {"job_id": task.id}
+    top_k = int(body.get("top_k") or body.get("topK") or DEFAULT_TOPK)
+    limit = int(body.get("limit") or DEFAULT_LIMIT)
+    task = rag_level_job.apply_async(kwargs={"top_k": top_k, "limit": limit}, queue="evalq")
+    return {"job_id": task.id}
 
 
 @router.get("/rag-level-job/{job_id}")
 def rag_job_status(job_id: str):
-  result = AsyncResult(job_id, app=celery_app)
-  state = result.state
+    result = AsyncResult(job_id, app=celery_app)
+    state = result.state
 
-  if state == "PENDING":
-    return {"status": "PENDING"}
-  if state in {"STARTED", "RETRY"}:
-    return {"status": state}
-  if state == "PROGRESS":
-    meta = result.info if isinstance(result.info, dict) else {}
-    return {"status": "PROGRESS", "progress": meta}
-  if state == "SUCCESS":
-    return {"status": "SUCCESS", "result": result.result}
+    if state == "PENDING":
+        return {"status": "PENDING"}
+    if state in {"STARTED", "RETRY"}:
+        return {"status": state}
+    if state == "PROGRESS":
+        meta = result.info if isinstance(result.info, dict) else {}
+        return {"status": "PROGRESS", "progress": meta}
+    if state == "SUCCESS":
+        return {"status": "SUCCESS", "result": result.result}
 
-  error_text = str(result.info) if result.info else "Unknown error"
-  return {"status": "FAILURE", "error": error_text}
+    error_text = str(result.info) if result.info else "Unknown error"
+    return {"status": "FAILURE", "error": error_text}
