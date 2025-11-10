@@ -120,6 +120,29 @@ export async function GET(req: NextRequest) {
       };
     });
 
+    const originMap = new Map<string, OriginAggregate>();
+    for (const point of points) {
+      let aggregate = originMap.get(point.origin);
+      if (!aggregate) {
+        aggregate = {
+          points: [],
+          totals: {
+            totalTokens: 0,
+            totalLatencyMs: 0,
+            totalEvents: 0,
+          },
+        };
+        originMap.set(point.origin, aggregate);
+      }
+
+      aggregate.points.push(point);
+      aggregate.totals.totalTokens += point.totalTokens ?? 0;
+      aggregate.totals.totalLatencyMs += point.totalLatencyMs ?? 0;
+      aggregate.totals.totalEvents += point.eventCount ?? 0;
+    }
+
+    const origins = Object.fromEntries(originMap);
+
     return NextResponse.json({
       range: {
         since: since.toISOString(),
@@ -127,6 +150,7 @@ export async function GET(req: NextRequest) {
       },
       bucketPrecision,
       points,
+      origins,
     });
   } catch (error) {
     const errorInfo =

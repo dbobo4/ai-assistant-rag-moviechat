@@ -13,10 +13,20 @@ type MonitoringPoint = {
   eventCount: number;
 };
 
+type OriginAggregate = {
+  points: MonitoringPoint[];
+  totals: {
+    totalTokens: number;
+    totalLatencyMs: number;
+    totalEvents: number;
+  };
+};
+
 type MonitoringResponse = {
   range: { since: string; days: number };
   bucketPrecision: BucketPrecision;
   points: MonitoringPoint[];
+  origins?: Record<string, OriginAggregate>;
 };
 
 type ChartSeries = {
@@ -28,21 +38,33 @@ type ChartSeries = {
   averageLatency?: number;
 };
 
-type ChartData = {
+type MonitoringSummary = {
   buckets: number[];
   precision: BucketPrecision;
-  tokens: {
-    series: ChartSeries[];
-    maxValue: number;
+  totalTokens: number;
+  totalEvents: number;
+  originCount: number;
+  averageLatency: number;
+};
+
+type OriginSectionData = {
+  origin: string;
+  title: string;
+  description: string;
+  color: string;
+  hasData: boolean;
+  summary: {
     totalTokens: number;
     totalEvents: number;
-  };
-  latency: {
-    series: ChartSeries[];
-    maxValue: number;
     averageLatency: number;
   };
-  originCount: number;
+  tokensChart: ChartView;
+  latencyChart: ChartView;
+};
+
+type MonitoringViewModel = {
+  summary: MonitoringSummary;
+  sections: OriginSectionData[];
 };
 
 const COLOR_PALETTE = [
@@ -62,6 +84,23 @@ const BUCKET_OPTIONS: { value: BucketPrecision; label: string }[] = [
   { value: "second", label: "Per second" },
 ];
 const GRID_LINES = 4;
+const ORIGIN_ORDER = ["chat", "upload"];
+const ORIGIN_COPY: Record<
+  string,
+  {
+    title: string;
+    description: string;
+  }
+> = {
+  chat: {
+    title: "Chat monitoring",
+    description: "Requests coming from the conversational assistant.",
+  },
+  upload: {
+    title: "Upload monitoring",
+    description: "Embedding jobs triggered by document uploads.",
+  },
+};
 
 export default function MonitoringPage() {
   const [days, setDays] = useState(7);
@@ -109,124 +148,140 @@ export default function MonitoringPage() {
     return () => controller.abort();
   }, [fetchData, refreshIndex]);
 
-  const chartData = useMemo<ChartData | null>(() => {
+  const monitoringView = useMemo<MonitoringViewModel | null>(() => {
     if (!data || data.points.length === 0) {
       return null;
     }
 
     const bucketSet = new Set<number>();
-    const originSet = new Set<string>();
-
     data.points.forEach((point) => {
       bucketSet.add(new Date(point.bucket).getTime());
-      originSet.add(point.origin);
     });
-
     const buckets = Array.from(bucketSet).sort((a, b) => a - b);
-    const origins = Array.from(originSet).sort();
+    const precision = data.bucketPrecision;
 
-    const colorMap = new Map<string, string>();
-    origins.forEach((origin, idx) => {
-      colorMap.set(origin, COLOR_PALETTE[idx % COLOR_PALETTE.length]);
+    const totalTokens = data.points.reduce((sum, point) => sum + point.totalTokens, 0);
+    const totalEvents = data.points.reduce((sum, point) => sum + point.eventCount, 0);
+    const totalLatencyMs = data.points.reduce(
+      (sum, point) => sum + point.totalLatencyMs,
+      0
+    );
+    const averageLatency = totalEvents > 0 ? totalLatencyMs / totalEvents : 0;
+
+    const detectedOrigins = new Set<string>(data.points.map((point) => point.origin));
+    ORIGIN_ORDER.forEach((origin) => detectedOrigins.add(origin));
+    const sortedOrigins = Array.from(detectedOrigins).sort((a, b) => {
+      const idxA = ORIGIN_ORDER.indexOf(a);
+      const idxB = ORIGIN_ORDER.indexOf(b);
+      if (idxA === -1 && idxB === -1) {
+        return a.localeCompare(b);
+      }
+      if (idxA === -1) return 1;
+      if (idxB === -1) return -1;
+      return idxA - idxB;
     });
 
-    const tokenSeries: ChartSeries[] = origins.map((origin) => {
-      const valueByBucket = new Map<number, number>();
-      const eventsByBucket = new Map<number, number>();
-      data.points
-        .filter((point) => point.origin === origin)
-        .forEach((point) => {
+    const sections: OriginSectionData[] = sortedOrigins
+      .map((origin, idx) => {
+        const aggregate = data.origins?.[origin];
+        const originPoints =
+          aggregate?.points ?? data.points.filter((point) => point.origin === origin);
+        const totals =
+          aggregate?.totals ?? {
+            totalTokens: originPoints.reduce((sum, point) => sum + point.totalTokens, 0),
+            totalLatencyMs: originPoints.reduce(
+              (sum, point) => sum + point.totalLatencyMs,
+              0
+            ),
+            totalEvents: originPoints.reduce((sum, point) => sum + point.eventCount, 0),
+          };
+        const color = COLOR_PALETTE[idx % COLOR_PALETTE.length];
+        const hasData = originPoints.length > 0;
+
+        const valueByBucket = new Map<number, number>();
+        const latencyByBucket = new Map<number, number>();
+        originPoints.forEach((point) => {
           const bucketTime = new Date(point.bucket).getTime();
           valueByBucket.set(bucketTime, point.totalTokens);
-          eventsByBucket.set(bucketTime, point.eventCount);
+          latencyByBucket.set(bucketTime, point.avgLatencyMs ?? 0);
         });
 
-      const values = buckets.map((bucket) => ({
-        time: bucket,
-        value: valueByBucket.get(bucket) ?? 0,
-      }));
+        const tokenValues = buckets.map((bucket) => ({
+          time: bucket,
+          value: valueByBucket.get(bucket) ?? 0,
+        }));
+        const latencyValues = buckets.map((bucket) => ({
+          time: bucket,
+          value: latencyByBucket.get(bucket) ?? 0,
+        }));
 
-      const totalTokens = values.reduce((sum, item) => sum + item.value, 0);
-      const eventCount = Array.from(eventsByBucket.values()).reduce(
-        (sum, count) => sum + count,
-        0
-      );
+        const tokensMaxValue = Math.max(1, ...tokenValues.map((v) => v.value));
+        const latencyMaxValue = Math.max(1, ...latencyValues.map((v) => v.value));
 
-      return {
-        origin,
-        color: colorMap.get(origin) ?? "#fff",
-        values,
-        totalTokens,
-        eventCount,
-      };
-    });
+        const copy = getOriginCopy(origin);
+        const averageLatencyByOrigin =
+          totals.totalEvents > 0 ? totals.totalLatencyMs / totals.totalEvents : 0;
 
-    const latencySeries: ChartSeries[] = origins.map((origin) => {
-      const valueByBucket = new Map<number, number>();
-      data.points
-        .filter((point) => point.origin === origin)
-        .forEach((point) => {
-          const bucketTime = new Date(point.bucket).getTime();
-          valueByBucket.set(bucketTime, point.avgLatencyMs ?? 0);
-        });
+        const tokensChart: ChartView = {
+          buckets,
+          precision,
+          series: [
+            {
+              origin,
+              color,
+              values: tokenValues,
+              totalTokens: totals.totalTokens,
+              eventCount: totals.totalEvents,
+            },
+          ],
+          maxValue: tokensMaxValue,
+          axisTitle: `${copy.title} — tokens (${formatPrecisionLabel(precision)})`,
+          yFormatter: (value) => formatNumber(value),
+        };
 
-      const values = buckets.map((bucket) => ({
-        time: bucket,
-        value: valueByBucket.get(bucket) ?? 0,
-      }));
+        const latencyChart: ChartView = {
+          buckets,
+          precision,
+          series: [
+            {
+              origin,
+              color,
+              values: latencyValues,
+              averageLatency: averageLatencyByOrigin,
+            },
+          ],
+          maxValue: latencyMaxValue,
+          axisTitle: `${copy.title} — latency (ms)`,
+          yFormatter: (value) => formatLatency(value, { withUnit: true }),
+        };
 
-      const averageLatency = values.length
-        ? values.reduce((sum, item) => sum + item.value, 0) / values.length
-        : 0;
-
-      return {
-        origin,
-        color: colorMap.get(origin) ?? "#fff",
-        values,
-        averageLatency,
-      };
-    });
-
-    const tokensMaxValue = Math.max(
-      1,
-      ...tokenSeries.flatMap((serie) => serie.values.map((v) => v.value))
-    );
-    const latencyMaxValue = Math.max(
-      1,
-      ...latencySeries.flatMap((serie) => serie.values.map((v) => v.value))
-    );
-
-    const totalTokens = tokenSeries.reduce(
-      (sum, serie) => sum + (serie.totalTokens ?? 0),
-      0
-    );
-    const totalEvents = tokenSeries.reduce(
-      (sum, serie) => sum + (serie.eventCount ?? 0),
-      0
-    );
-
-    const latencyValues = latencySeries.flatMap((serie) =>
-      serie.values.map((v) => v.value)
-    );
-    const averageLatency = latencyValues.length
-      ? latencyValues.reduce((sum, value) => sum + value, 0) / latencyValues.length
-      : 0;
+        return {
+          origin,
+          title: copy.title,
+          description: copy.description,
+          color,
+          hasData,
+          summary: {
+            totalTokens: totals.totalTokens,
+            totalEvents: totals.totalEvents,
+            averageLatency: averageLatencyByOrigin,
+          },
+          tokensChart,
+          latencyChart,
+        };
+      })
+      .filter((section) => section.hasData || ORIGIN_ORDER.includes(section.origin));
 
     return {
-      buckets,
-      precision: data.bucketPrecision,
-      tokens: {
-        series: tokenSeries,
-        maxValue: tokensMaxValue,
+      summary: {
+        buckets,
+        precision,
         totalTokens,
         totalEvents,
-      },
-      latency: {
-        series: latencySeries,
-        maxValue: latencyMaxValue,
+        originCount: new Set(data.points.map((point) => point.origin)).size,
         averageLatency,
       },
-      originCount: origins.length,
+      sections,
     };
   }, [data]);
 
@@ -278,24 +333,24 @@ export default function MonitoringPage() {
           <div className="evaluation-results">Loading monitoring data…</div>
         )}
 
-        {!error && !loading && chartData === null && (
+        {!error && !loading && monitoringView === null && (
           <div className="evaluation-results">No monitoring data available for this range.</div>
         )}
 
-        {!error && chartData && (
+        {!error && monitoringView && (
           <>
             <div className="evaluation-summary monitoring-summary">
               <div>
                 <span className="summary-label">Total tokens</span>
-                {formatNumber(chartData.tokens.totalTokens)}
+                {formatNumber(monitoringView.summary.totalTokens)}
               </div>
               <div>
                 <span className="summary-label">Total events</span>
-                {formatNumber(chartData.tokens.totalEvents)}
+                {formatNumber(monitoringView.summary.totalEvents)}
               </div>
               <div>
                 <span className="summary-label">Origins</span>
-                {chartData.originCount}
+                {monitoringView.summary.originCount}
               </div>
               <div>
                 <span className="summary-label">Range</span>
@@ -303,49 +358,36 @@ export default function MonitoringPage() {
               </div>
               <div>
                 <span className="summary-label">Resolution</span>
-                {formatPrecisionLabel(chartData.precision)}
+                {formatPrecisionLabel(monitoringView.summary.precision)}
               </div>
               <div>
                 <span className="summary-label">Avg latency</span>
-                {formatLatency(chartData.latency.averageLatency)}
+                {formatLatency(monitoringView.summary.averageLatency)}
               </div>
             </div>
 
-            <div
-              className="monitoring-chart-grid"
-              style={{
-                display: "flex",
-                gap: "2rem",
-                flexWrap: "wrap",
-                justifyContent: "center",
-                width: "100%",
-                marginTop: "1.5rem",
-              }}
-            >
-              <MonitoringChartCard
-                chart={{
-                  buckets: chartData.buckets,
-                  precision: chartData.precision,
-                  series: chartData.tokens.series,
-                  maxValue: chartData.tokens.maxValue,
-                  axisTitle: `Total tokens per origin (${formatPrecisionLabel(chartData.precision)})`,
-                  yFormatter: (value) => formatNumber(value),
-                }}
-                variant="tokens"
-              />
+            {monitoringView.sections.length === 0 && (
+              <div className="evaluation-results">
+                No per-origin sections available for this range.
+              </div>
+            )}
 
-              <MonitoringChartCard
-                chart={{
-                  buckets: chartData.buckets,
-                  precision: chartData.precision,
-                  series: chartData.latency.series,
-                  maxValue: chartData.latency.maxValue,
-                  axisTitle: "Average latency per origin (ms)",
-                  yFormatter: (value) => formatLatency(value, { withUnit: true }),
+            {monitoringView.sections.length > 0 && (
+              <div
+                className="monitoring-origin-sections"
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "2rem",
+                  width: "100%",
+                  marginTop: "1.5rem",
                 }}
-                variant="latency"
-              />
-            </div>
+              >
+                {monitoringView.sections.map((section) => (
+                  <MonitoringOriginSection key={section.origin} section={section} />
+                ))}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -367,17 +409,144 @@ type ChartCardProps = {
   variant: "tokens" | "latency";
 };
 
+type OriginSectionProps = {
+  section: OriginSectionData;
+};
+
+function MonitoringOriginSection({ section }: OriginSectionProps) {
+  const accent = section.color;
+  const borderColor = hexToRgba(accent, 0.45);
+  const glowColor = hexToRgba(accent, 0.35);
+  const panelBackground = `linear-gradient(135deg, ${hexToRgba(
+    accent,
+    0.35
+  )}, rgba(15,23,42,0.93))`;
+
+  return (
+    <section
+      className="monitoring-origin-section"
+      style={{
+        width: "100%",
+        padding: "2rem",
+        borderRadius: "28px",
+        background: panelBackground,
+        border: `1px solid ${borderColor}`,
+        boxShadow: `0 25px 60px ${glowColor}`,
+        color: "#f8fafc",
+        position: "relative",
+        overflow: "hidden",
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: "0",
+          borderRadius: "inherit",
+          opacity: 0.12,
+          background: `radial-gradient(circle at top right, ${hexToRgba(
+            accent,
+            0.75
+          )}, transparent 55%)`,
+          pointerEvents: "none",
+        }}
+      />
+      <div
+        className="monitoring-origin-header"
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "1.5rem",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          width: "100%",
+        }}
+      >
+        <div style={{ flex: "1 1 280px", position: "relative", zIndex: 1 }}>
+          <div
+            style={{
+              width: "60px",
+              height: "4px",
+              borderRadius: "999px",
+              backgroundColor: accent,
+              marginBottom: "1rem",
+            }}
+          />
+          <h2 style={{ margin: 0, color: "#f8fafc" }}>{section.title}</h2>
+          <p style={{ marginTop: "0.5rem", color: "rgba(226,232,240,0.85)" }}>
+            {section.description}
+          </p>
+        </div>
+        <div
+          className="monitoring-origin-stats"
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "1.5rem",
+            minWidth: "220px",
+            position: "relative",
+            zIndex: 1,
+          }}
+        >
+          <div>
+            <span className="summary-label">Tokens</span>
+            {formatNumber(section.summary.totalTokens)}
+          </div>
+          <div>
+            <span className="summary-label">Events</span>
+            {formatNumber(section.summary.totalEvents)}
+          </div>
+          <div>
+            <span className="summary-label">Avg latency</span>
+            {formatLatency(section.summary.averageLatency)}
+          </div>
+        </div>
+      </div>
+
+      {!section.hasData && (
+        <div
+          className="evaluation-results"
+          style={{
+            marginTop: "1.5rem",
+            borderRadius: "16px",
+            textAlign: "center",
+            position: "relative",
+            zIndex: 1,
+          }}
+        >
+          No {section.title.toLowerCase()} data for this range.
+        </div>
+      )}
+
+      <div
+        className="monitoring-chart-grid"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
+          gap: "1.5rem",
+          width: "100%",
+          marginTop: "1.5rem",
+          position: "relative",
+          zIndex: 1,
+        }}
+      >
+        <MonitoringChartCard chart={section.tokensChart} variant="tokens" />
+        <MonitoringChartCard chart={section.latencyChart} variant="latency" />
+      </div>
+    </section>
+  );
+}
+
 function MonitoringChartCard({ chart, variant }: ChartCardProps) {
   return (
     <div
       className="evaluation-results monitoring-chart-card"
       style={{
-        flex: "1 1 420px",
         width: "100%",
-        maxWidth: "620px",
-        borderRadius: "18px",
-        boxShadow: "0 15px 45px rgba(0,0,0,0.4)",
+        borderRadius: "20px",
+        boxShadow: "0 18px 45px rgba(15,23,42,0.18)",
         margin: "0 auto",
+        minHeight: "420px",
       }}
     >
       <MonitoringChart chart={chart} />
@@ -391,11 +560,13 @@ type ChartProps = {
 };
 
 function MonitoringChart({ chart }: ChartProps) {
-  const innerWidth = 560;
-  const innerHeight = 250;
-  const margin = { top: 24, right: 32, bottom: 72, left: 80 };
+  const innerWidth = 720;
+  const innerHeight = 320;
+  const margin = { top: 32, right: 40, bottom: 96, left: 96 };
   const width = innerWidth + margin.left + margin.right;
   const height = innerHeight + margin.top + margin.bottom;
+  const xTickRotation = -32;
+  const axisLabelStyle = { fontSize: "9px" };
 
   const maxValue = chart.maxValue === 0 ? 1 : chart.maxValue;
   const bucketCount = chart.buckets.length;
@@ -435,8 +606,13 @@ function MonitoringChart({ chart }: ChartProps) {
   );
 
   return (
-    <div className="monitoring-chart" style={{ padding: "1rem" }}>
-      <svg viewBox={`0 0 ${width} ${height}`} role="img">
+    <div className="monitoring-chart" style={{ padding: "1rem", width: "100%" }}>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        style={{ width: "100%", height: "auto" }}
+        preserveAspectRatio="xMidYMid meet"
+      >
         <defs>
           {chart.series.map((serie) => (
             <linearGradient
@@ -471,6 +647,7 @@ function MonitoringChart({ chart }: ChartProps) {
                 y={y + 4}
                 textAnchor="end"
                 className="monitoring-axis-label"
+                style={axisLabelStyle}
               >
                 {chart.yFormatter(tick)}
               </text>
@@ -517,7 +694,14 @@ function MonitoringChart({ chart }: ChartProps) {
           return (
             <g key={bucket} transform={`translate(${x}, ${margin.top + innerHeight})`}>
               <line y2={12} stroke="#1f2937" strokeWidth={1} />
-              <text y={28} textAnchor="middle" className="monitoring-axis-label">
+              <text
+                y={32}
+                textAnchor="end"
+                className="monitoring-axis-label monitoring-axis-label-x"
+                transform={`rotate(${xTickRotation})`}
+                dy="0.35em"
+                style={axisLabelStyle}
+              >
                 {formatBucketLabel(bucket)}
               </text>
             </g>
@@ -571,6 +755,42 @@ function MonitoringLegend({ series, variant }: LegendProps) {
       ))}
     </div>
   );
+}
+
+function hexToRgba(hex: string, alpha: number) {
+  const normalized = normalizeHex(hex);
+  const bigint = parseInt(normalized, 16);
+  const r = (bigint >> 16) & 255;
+  const g = (bigint >> 8) & 255;
+  const b = bigint & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function normalizeHex(hex: string) {
+  const value = hex?.trim().replace("#", "") ?? "60a5fa";
+  if (value.length === 3) {
+    return value
+      .split("")
+      .map((char) => char + char)
+      .join("");
+  }
+  if (value.length !== 6 || Number.isNaN(Number.parseInt(value, 16))) {
+    return "60a5fa";
+  }
+  return value;
+}
+
+function getOriginCopy(origin: string) {
+  const fallbackTitle = `${capitalizeWord(origin)} monitoring`;
+  const fallbackDescription = `Requests grouped under "${origin}".`;
+  return ORIGIN_COPY[origin] ?? { title: fallbackTitle, description: fallbackDescription };
+}
+
+function capitalizeWord(value: string) {
+  if (!value) {
+    return "";
+  }
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function formatNumber(value: number) {
