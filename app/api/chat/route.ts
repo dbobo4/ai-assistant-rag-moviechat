@@ -181,11 +181,6 @@ export async function POST(req: NextRequest) {
 
   for (let step = 0; step < 3; step++) {
     try {
-      console.log("[chat] step", step, {
-        toolUsed,
-        historyCount: history.length,
-      });
-
       const apiStart = Date.now();
       const completion = await client.chat.completions.create({
         model: CHAT_MODEL,
@@ -203,14 +198,11 @@ export async function POST(req: NextRequest) {
 
       const msg = completion.choices[0]?.message;
       if (!msg) {
-        console.log("[chat] no message returned from model");
         break;
       }
 
       if (!msg.tool_calls || msg.tool_calls.length === 0) {
-        const preview = (msg.content ?? "").slice(0, 120);
-        console.log("[chat] model returned final text", { length: (msg.content ?? "").length, preview });
-      const text =
+        const text =
         (msg.content && msg.content.trim().length > 0
           ? msg.content
           : "I'm sorry, but I don't have the necessary information to answer that.") ?? "";
@@ -223,9 +215,6 @@ export async function POST(req: NextRequest) {
       }
 
       if (toolUsed) {
-        console.log("[chat] model attempted another tool after first", {
-          toolCalls: msg.tool_calls?.map((t) => t.function?.name),
-        });
       return new Response(
         "Unable to provide additional tool output at this time.",
         {
@@ -255,10 +244,6 @@ export async function POST(req: NextRequest) {
       try {
         if (name === "addResource") {
           const args = JSON.parse(rawArgs) as AddResourceArgs;
-          console.log("[chat] tool:addResource", {
-            contentPreview: (args?.content ?? "").slice(0, 80),
-            length: (args?.content ?? "").length,
-          });
           const saved = await createResourceRaw({ content: args.content });
           result = { ok: true, saved };
           return new Response("Saved.", {
@@ -270,12 +255,7 @@ export async function POST(req: NextRequest) {
           });
         } else if (name === "getInformation") {
           const args = JSON.parse(rawArgs) as GetInformationArgs;
-          console.log("[chat] tool:getInformation", {
-            questionPreview: (args?.question ?? "").slice(0, 80),
-            length: (args?.question ?? "").length,
-          });
           const chunks = await findRelevantContent(args.question);
-          console.log("[chat] retrieved chunks", { count: chunks.length });
           result = { ok: true, chunks };
         } else {
           result = { ok: false, error: `Unknown tool: ${name}` };
