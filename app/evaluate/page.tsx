@@ -346,44 +346,75 @@ export default function EvaluatePage() {
   useEffect(() => {
     const controller = new AbortController();
     let mounted = true;
+    let retryTimer: NodeJS.Timeout | null = null;
+
+    const clearRetryTimer = () => {
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
 
     async function loadMetadata() {
-      try {
-        setMetaLoading(true);
-        setMetaError(null);
-        const res = await fetch("/api/evaluate", {
-          method: "GET",
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(text || "Failed to load evaluation metadata");
-        }
-        const data = (await res.json()) as EvaluateMetadataResponse;
-        if (!mounted) return;
-        const personaList = normalizeMetadata(data.personas);
-        const goalList = normalizeMetadata(data.goals);
-        setPersonaOptions(personaList);
-        setGoalOptions(goalList);
-        setPersonaId((prev) => {
-          if (personaList.length === 0) return prev;
-          return personaList.some((option) => option.id === prev) ? prev : personaList[0].id;
-        });
-        setGoalId((prev) => {
-          if (goalList.length === 0) return prev;
-          return goalList.some((option) => option.id === prev) ? prev : goalList[0].id;
-        });
-      } catch (error) {
-        if ((error as Error).name === "AbortError") {
-          return;
-        }
-        if (mounted) {
-          setMetaError(error instanceof Error ? error.message : "Failed to load evaluation metadata");
-        }
-      } finally {
-        if (mounted) {
+      const MAX_ATTEMPTS = 10;
+      const RETRY_DELAY_MS = 5000;
+      setMetaLoading(true);
+      setMetaError(null);
+
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          const res = await fetch("/api/evaluate", {
+            method: "GET",
+            cache: "no-store",
+            signal: controller.signal,
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || "Failed to load evaluation metadata");
+          }
+          const data = (await res.json()) as EvaluateMetadataResponse;
+          if (!mounted) {
+            return;
+          }
+          const personaList = normalizeMetadata(data.personas);
+          const goalList = normalizeMetadata(data.goals);
+          setPersonaOptions(personaList);
+          setGoalOptions(goalList);
+          setPersonaId((prev) => {
+            if (personaList.length === 0) return prev;
+            return personaList.some((option) => option.id === prev) ? prev : personaList[0].id;
+          });
+          setGoalId((prev) => {
+            if (goalList.length === 0) return prev;
+            return goalList.some((option) => option.id === prev) ? prev : goalList[0].id;
+          });
           setMetaLoading(false);
+          return;
+        } catch (error) {
+          const isAbort =
+            (error as Error).name === "AbortError" || controller.signal.aborted || !mounted;
+          if (isAbort) {
+            clearRetryTimer();
+            if (mounted) {
+              setMetaLoading(false);
+            }
+            return;
+          }
+
+          if (attempt === MAX_ATTEMPTS) {
+            if (mounted) {
+              setMetaError("Failed to load persona/goal metadata: Failed to fetch");
+              setMetaLoading(false);
+            }
+            return;
+          }
+
+          await new Promise<void>((resolve) => {
+            retryTimer = setTimeout(() => {
+              retryTimer = null;
+              resolve();
+            }, RETRY_DELAY_MS);
+          });
         }
       }
     }
@@ -392,6 +423,7 @@ export default function EvaluatePage() {
 
     return () => {
       mounted = false;
+      clearRetryTimer();
       controller.abort();
     };
   }, []);
