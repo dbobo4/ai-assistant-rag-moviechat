@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 from pathlib import Path
 
@@ -33,6 +34,7 @@ def process_file(path: Path) -> list[str]:
     ext = path.suffix.lower()
     filename = str(path)
 
+    # Select appropriate partitioner based on file extension
     if ext == ".md":
         from unstructured.partition.md import partition_md
         elements = partition_md(filename=filename)
@@ -45,9 +47,23 @@ def process_file(path: Path) -> list[str]:
     else:
         raise HTTPException(status_code=415, detail=f"Unsupported file type: {ext}")
 
+    # Filter out empty, very short, or separator-like elements
+    filtered_elements = []
+    for el in elements:
+        text = str(el).strip()
+        if not text:
+            continue
+        # Skip if too short and contains only non-alphanumeric symbols
+        if len(text) < 10 and re.match(r'^[-–—_=*#.\s]+$', text):
+            continue
+        filtered_elements.append(el)
+
+    # Chunk the filtered elements
     from unstructured.chunking.basic import chunk_elements
-    chunks = chunk_elements(elements, max_characters=500, overlap=50)
-    texts = [str(ch) for ch in chunks if str(ch).strip()]
+    chunks = chunk_elements(filtered_elements, max_characters=500, overlap=50)
+
+    # Convert chunks to plain text strings
+    texts = [str(ch).strip() for ch in chunks if str(ch).strip()]
     return texts
 
 
@@ -66,10 +82,11 @@ def process_single_file(req: FileReq):
     if not texts:
         return {"processed_chunks": []}
 
-    res = requests.post(CHUNK_API_URL, json={"chunks": texts}, timeout=60)
+    # Upload processed chunks to the application endpoint
     try:
+        res = requests.post(CHUNK_API_URL, json={"chunks": texts}, timeout=60)
         payload = res.json()
     except Exception:
-        payload = {"status_code": res.status_code, "text": res.text}
+        payload = {"status_code": res.status_code, "text": res.text if res else "no response"}
 
     return {"processed_chunks": texts, "next_response": payload}
