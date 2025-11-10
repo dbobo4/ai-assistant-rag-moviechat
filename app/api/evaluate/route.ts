@@ -97,6 +97,16 @@ export async function POST(req: NextRequest) {
       : typeof body?.turnCount === "number"
       ? body.turnCount
       : 4;
+  const rawFileCount =
+    typeof body?.fileCount === "number"
+      ? body.fileCount
+      : typeof body?.file_limit === "number"
+      ? body.file_limit
+      : undefined;
+  const fileCount =
+    rawFileCount !== undefined && Number.isFinite(rawFileCount)
+      ? Math.max(1, Math.floor(rawFileCount))
+      : undefined;
 
   const backendUrl = env.PY_BACKEND_URL ?? "http://rag_backend:8000";
 
@@ -277,13 +287,23 @@ export async function POST(req: NextRequest) {
     evaluateUrl,
     backendUrl,
     timeoutMs,
+    fileCount: fileCount ?? null,
   });
 
   let response: Response | undefined;
   try {
+    const singleTurnPayload =
+      fileCount !== undefined ? { file_limit: fileCount } : undefined;
+    const headers: Record<string, string> = singleTurnPayload
+      ? { "X-Request-ID": reqId, "Content-Type": "application/json" }
+      : { "X-Request-ID": reqId };
+    const bodyPayload = singleTurnPayload
+      ? JSON.stringify(singleTurnPayload)
+      : undefined;
     response = await fetch(evaluateUrl, {
       method: "POST",
-      headers: { "X-Request-ID": reqId },
+      headers,
+      body: bodyPayload,
       signal,
     });
 

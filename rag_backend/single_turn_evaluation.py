@@ -1,14 +1,11 @@
 import json
 import os
 import re
-import sys
 import time
 import uuid
-import threading
-import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 from fastapi import APIRouter, Request
@@ -20,6 +17,40 @@ from openai import OpenAI
 
 def set_rid_for_thread(rid: str):
     pass
+
+def _normalize_file_limit(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            limit = int(value)
+        except (ValueError, TypeError):
+            return None
+        if limit < 1:
+            limit = 1
+        return limit
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            limit = int(float(stripped))
+        except (ValueError, TypeError):
+            return None
+        if limit < 1:
+            limit = 1
+        return limit
+    return None
+
+def _extract_file_limit_from_payload(payload: Optional[Dict[str, Any]]) -> Optional[int]:
+    if not isinstance(payload, dict):
+        return None
+    raw = (
+        payload.get("file_limit")
+        or payload.get("fileCount")
+        or payload.get("file_count")
+    )
+    return _normalize_file_limit(raw)
 
 
 # --------- CONFIG ---------
@@ -191,9 +222,12 @@ def build_golden_dataset(
     *,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     rid: str | None = None,
+    file_limit: Optional[int] = None,
 ) -> tuple[List[Sample], int, int]:
     samples: List[Sample] = []
     files = [p for p in sorted(data_dir.rglob("*")) if p.is_file()]
+    if file_limit is not None and file_limit > 0:
+        files = files[:file_limit]
     total_expected = len(files) * num_pairs
     processed = 0
 
@@ -377,10 +411,14 @@ def evaluate(
     rid: str | None = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     dataset_filename: str | None = None,
+    file_limit: int | None = None,
 ) -> Dict[str, object]:
     data_dir = Path(data_dir or DEFAULT_MOVIE_DATA_DIR)
     chat_url = chat_url or DEFAULT_APP_CHAT_URL
     num_pairs = int(num_pairs or DEFAULT_GOLDEN_QUESTIONS)
+    normalized_file_limit = (
+        _normalize_file_limit(file_limit) if file_limit is not None else None
+    )
 
     if not data_dir.exists():
         raise RuntimeError(f"Data directory not found: {data_dir}")
@@ -391,6 +429,7 @@ def evaluate(
         num_pairs,
         progress_callback=progress_callback,
         rid=rid,
+        file_limit=normalized_file_limit,
     )
 
     dataset_output = {
@@ -430,7 +469,7 @@ def evaluate(
 
 
 @celery_app.task(bind=True, name="tasks.evaluate_job")
-def evaluate_job(self, job_id: str | None = None):
+def evaluate_job(self, job_id: str | None = None, file_limit: int | None = None):
     rid = job_id or uuid.uuid4().hex
 
     def progress(step: int, total: int, phase: str):
@@ -444,6 +483,7 @@ def evaluate_job(self, job_id: str | None = None):
             rid=rid,
             progress_callback=progress,
             dataset_filename=f"golden_dataset_{rid}.json",
+            file_limit=file_limit,
         )
         summary["rid"] = rid
         return summary
@@ -451,10 +491,20 @@ def evaluate_job(self, job_id: str | None = None):
         raise
 
 @router.post("/evaluate-job")
-def start_evaluation_job(request: Request):
+async def start_evaluation_job(request: Request):
     rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex
     set_rid_for_thread(rid)
-    task = evaluate_job.apply_async(kwargs={"job_id": rid}, queue="evalq")
+    file_limit: Optional[int] = None
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        file_limit = _extract_file_limit_from_payload(payload)
+    task = evaluate_job.apply_async(
+        kwargs={"job_id": rid, "file_limit": file_limit},
+        queue="evalq",
+    )
     return {"job_id": task.id}
 
 
@@ -482,13 +532,18 @@ def evaluation_job_status(job_id: str):
 
 
 @router.post("/evaluate-single-turn")
-def evaluate_single_turn(request: Request):
+async def evaluate_single_turn(request: Request):
     # Propagate incoming RID or create a new one
     rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex
     set_rid_for_thread(rid)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = None
+    file_limit = _extract_file_limit_from_payload(payload if isinstance(payload, dict) else None)
 
     try:
-        summary = evaluate(write_dataset=True, rid=rid)
+        summary = evaluate(write_dataset=True, rid=rid, file_limit=file_limit)
         return summary
     except Exception as exc:
         # Do not fail silently; surface error + RID

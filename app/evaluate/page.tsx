@@ -206,6 +206,7 @@ export default function EvaluatePage() {
   const ragJobIdRef = useRef<string | null>(null);
   const ragAbortRef = useRef<AbortController | null>(null);
   const ragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [fileCount, setFileCount] = useState(1);
 
   const [personaOptions, setPersonaOptions] = useState<PersonaOption[]>([]);
   const [goalOptions, setGoalOptions] = useState<GoalOption[]>([]);
@@ -297,8 +298,13 @@ export default function EvaluatePage() {
     }
   }, []);
 
-  const startEvaluation = useCallback(async () => {
-    const response = await fetch("/api/evaluate/start", { method: "POST" });
+  const startEvaluation = useCallback(async (options?: { fileCount?: number }) => {
+    const normalizedCount = Math.max(1, Math.floor(options?.fileCount ?? 1));
+    const response = await fetch("/api/evaluate/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileCount: normalizedCount }),
+    });
     if (!response.ok) {
       const text = await response.text();
       throw new Error(text || "Evaluation start failed");
@@ -312,7 +318,7 @@ export default function EvaluatePage() {
     setLoading(true);
 
     try {
-      const jobId = await startEvaluation();
+      const jobId = await startEvaluation({ fileCount });
       jobIdRef.current = jobId;
       setStatus("PENDING");
       setProgress(null);
@@ -322,7 +328,7 @@ export default function EvaluatePage() {
       setError(message);
       setLoading(false);
     }
-  }, [pollStatus, resetState, startEvaluation]);
+  }, [fileCount, pollStatus, resetState, startEvaluation]);
 
   const resetRagState = useCallback(() => {
     setRagResult(null);
@@ -634,9 +640,27 @@ export default function EvaluatePage() {
             correctness and relevance metrics.
           </p>
         </div>
-        <button className="evaluation-button" onClick={runEvaluation} disabled={loading}>
-          {loading ? "Running evaluation..." : "Start Single-turn evaluation"}
-        </button>
+        <div className="rag-inputs">
+          <label>
+            <span>Files to evaluate</span>
+            <input
+              type="number"
+              min={1}
+              value={fileCount}
+              onChange={(event) => {
+                const nextValue = Number(event.target.value);
+                if (!Number.isFinite(nextValue) || nextValue <= 0) {
+                  setFileCount(1);
+                } else {
+                  setFileCount(Math.floor(nextValue));
+                }
+              }}
+            />
+          </label>
+          <button className="evaluation-button" onClick={runEvaluation} disabled={loading}>
+            {loading ? "Running evaluation..." : "Start Single-turn evaluation"}
+          </button>
+        </div>
         {error && <div className="evaluation-error">Error: {error}</div>}
         {loading && status && (
           <div className="evaluation-progress">
