@@ -647,19 +647,3 @@ def evaluate_single_turn(request: Request):
         log.error("evaluate.failed " + repr(exc), extra={"rid": rid})
         log.error(traceback.format_exc(), extra={"rid": rid})
         return {"error": repr(exc), "rid": rid}
-
-if __name__ == "__main__":
-    rid = uuid.uuid4().hex
-    set_rid_for_thread(rid)
-    try:
-        summary = evaluate(write_dataset=True, rid=rid)
-        log.info("CLI run summary " + json.dumps({
-            "total": summary.get("total"),
-            "accuracy": summary.get("accuracy"),
-            "relevance_rate": summary.get("relevance_rate")
-        }), extra={"rid": rid})
-        print(json.dumps(summary, ensure_ascii=False, indent=2))
-    except Exception as exc:
-        log.error(f"[ERROR] {exc}")
-        print(f"[ERROR] {exc}", file=sys.stderr)
-        sys.exit(1)
