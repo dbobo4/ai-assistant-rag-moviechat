@@ -65,10 +65,11 @@ The Next.js API (`/api/evaluate/*`) proxies requests to the backend, and the fro
 
 Defined in `lib/db/schema.ts`. Key tables:
 
-| Table      | Description                                     |
-|------------|-------------------------------------------------|
-| resources  | Stores raw text chunks.                         |
-| embeddings | pgvector embeddings linked to resources.        |
+| Table      | Description                                                                 |
+|------------|-----------------------------------------------------------------------------|
+| resources  | Stores raw text chunks ingested from uploads.                               |
+| embeddings | pgvector embeddings linked to resources (vector(1536) using pgvector).      |
+| monitoring | Lightweight telemetry for chat/upload events (origin, model, tokens, latency). |
 
 ### Embedding Retrieval
 

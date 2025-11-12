@@ -20,6 +20,7 @@ type OriginAggregate = {
     totalLatencyMs: number;
     totalEvents: number;
   };
+  models?: string[];
 };
 
 type MonitoringResponse = {
@@ -60,6 +61,7 @@ type OriginSectionData = {
   };
   tokensChart: ChartView;
   latencyChart: ChartView;
+  models: string[];
 };
 
 type MonitoringViewModel = {
@@ -255,6 +257,11 @@ export default function MonitoringPage() {
           yFormatter: (value) => formatLatency(value, { withUnit: true }),
         };
 
+        const models =
+          aggregate && Array.isArray(aggregate.models)
+            ? aggregate.models.filter((model): model is string => typeof model === "string" && model.trim().length > 0)
+            : [];
+
         return {
           origin,
           title: copy.title,
@@ -268,6 +275,7 @@ export default function MonitoringPage() {
           },
           tokensChart,
           latencyChart,
+          models,
         };
       })
       .filter((section) => section.hasData || ORIGIN_ORDER.includes(section.origin));
@@ -476,6 +484,34 @@ function MonitoringOriginSection({ section }: OriginSectionProps) {
           <p style={{ marginTop: "0.5rem", color: "rgba(226,232,240,0.85)" }}>
             {section.description}
           </p>
+          {section.models.length > 0 && (
+            <div
+              className="monitoring-origin-models"
+              style={{
+                marginTop: "0.75rem",
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "0.5rem",
+              }}
+            >
+              {section.models.map((model) => (
+                <span
+                  key={model}
+                  style={{
+                    padding: "0.25rem 0.75rem",
+                    borderRadius: "999px",
+                    backgroundColor: "rgba(15,23,42,0.4)",
+                    border: "1px solid rgba(248,250,252,0.2)",
+                    fontSize: "0.85rem",
+                    letterSpacing: "0.03em",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {model}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <div
           className="monitoring-origin-stats"
