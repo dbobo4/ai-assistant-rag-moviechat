@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from reranking import router as reranking_router
 from single_turn_evaluation import router as evaluation_router
-from rag_evalation import router as rag_eval_router
+from rag_evaluation import router as rag_eval_router
 from user_satisfaction_evaluation.user_satisfaction_evaluation import (
     router as user_eval_router,
 )
