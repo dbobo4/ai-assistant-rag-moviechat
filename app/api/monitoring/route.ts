@@ -44,6 +44,12 @@ type OriginAggregate = {
     totalLatencyMs: number;
     totalEvents: number;
   };
+  models: string[];
+};
+
+type OriginModelRow = {
+  origin: string;
+  model: string | null;
 };
 
 const DEFAULT_DAYS = 7;
@@ -104,6 +110,12 @@ export async function GET(req: NextRequest) {
       ORDER BY 1 ASC, 2 ASC
     `;
 
+    const modelRows = await sql<OriginModelRow[]>`
+      SELECT DISTINCT origin, model
+      FROM monitoring
+      WHERE created_at::timestamptz >= ${sinceIso}::timestamptz
+    `;
+
     const points = rows.map((row) => {
       const bucketDate =
         row.bucket instanceof Date ? row.bucket : new Date(row.bucket);
@@ -131,6 +143,7 @@ export async function GET(req: NextRequest) {
             totalLatencyMs: 0,
             totalEvents: 0,
           },
+          models: [],
         };
         originMap.set(point.origin, aggregate);
       }
@@ -139,6 +152,21 @@ export async function GET(req: NextRequest) {
       aggregate.totals.totalTokens += point.totalTokens ?? 0;
       aggregate.totals.totalLatencyMs += point.totalLatencyMs ?? 0;
       aggregate.totals.totalEvents += point.eventCount ?? 0;
+    }
+
+    const modelsByOrigin = new Map<string, Set<string>>();
+    for (const row of modelRows) {
+      if (!row.origin) continue;
+      const normalizedModel = (row.model ?? "unknown").trim();
+      const originKey = row.origin;
+      const modelSet = modelsByOrigin.get(originKey) ?? new Set<string>();
+      modelSet.add(normalizedModel.length > 0 ? normalizedModel : "unknown");
+      modelsByOrigin.set(originKey, modelSet);
+    }
+
+    for (const [origin, aggregate] of originMap.entries()) {
+      const models = modelsByOrigin.get(origin);
+      aggregate.models = models ? Array.from(models).sort() : [];
     }
 
     const origins = Object.fromEntries(originMap);
