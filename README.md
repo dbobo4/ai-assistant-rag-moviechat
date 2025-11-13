@@ -73,8 +73,11 @@ Clone or download the repository, copy the environment files, and start Docker:
 ```bash
 git clone https://github.com/your-org/ai-assistant-moviechat.git
 cd ai-assistant-moviechat
+
 cp app.env.example app.env
+cp db.env.example db.env
 cp rag_backend/rag_backend.env.example rag_backend/rag_backend.env
+
 docker-compose up --build
 ```
 
